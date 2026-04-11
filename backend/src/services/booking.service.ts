@@ -6,7 +6,7 @@ export async function getServices() {
   if (error) throw error;
   return data;
 }
-
+// name chnage
 export async function getNearbyMechanics() {
   const { data, error } = await supabaseAdmin
     .from('profiles')
