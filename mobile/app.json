@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Roadside Rescue",
+    "slug": "roadside-rescue",
+    "scheme": "roadside-rescue",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "android": {
+      "package": "com.roadside.rescue"
+    },
+    "ios": {
+      "bundleIdentifier": "com.roadside.rescue"
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      }
+    }
+  }
+}
