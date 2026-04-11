@@ -16,3 +16,9 @@ export function emitBookingUpdate(bookingId: string, payload: unknown) {
   if (!ioInstance) return;
   ioInstance.to(`booking:${bookingId}`).emit('booking:updated', payload);
 }
+
+export function emitMechanicLocation(data: any) {
+  if (ioInstance) {
+    ioInstance.emit('mechanic:locationUpdate', data);
+  }
+}

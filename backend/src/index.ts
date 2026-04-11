@@ -9,8 +9,12 @@ import { servicesRouter } from './routes/services.routes';
 import { bookingsRouter } from './routes/bookings.routes';
 import { mechanicsRouter } from './routes/mechanics.routes';
 import { initSocket } from './socket';
+import cookieParser from 'cookie-parser';
+import { authMiddleware } from './middleware/auth';
+import { authRouter } from './routes/auth.routes';
 
 const app = express();
+app.use(cookieParser());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -30,8 +34,9 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/services', servicesRouter);
-app.use('/bookings', bookingsRouter);
-app.use('/mechanics', mechanicsRouter);
+app.use('/auth', authRouter);
+app.use('/bookings',authMiddleware, bookingsRouter);
+app.use('/mechanics',authMiddleware, mechanicsRouter);
 
 server.listen(env.port, () => {
   console.log(`API running on http://localhost:${env.port}`);

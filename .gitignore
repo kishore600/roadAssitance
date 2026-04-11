@@ -1,0 +1,83 @@
+# ========================
+# 🔐 ENV FILES
+# ========================
+.env
+.env.*
+.env.local
+.env.*.local
+.env.keys
+
+# ========================
+# 🚀 SUPABASE
+# ========================
+.supabase
+.branches
+.temp
+
+# ========================
+# 🧠 NODE (Backend)
+# ========================
+node_modules/
+dist/
+build/
+coverage/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ========================
+# 🧾 TYPESCRIPT
+# ========================
+*.tsbuildinfo
+
+# ========================
+# 📦 CACHE
+# ========================
+.cache/
+.tmp/
+
+# ========================
+# 🖥️ OS FILES
+# ========================
+.DS_Store
+Thumbs.db
+
+# ========================
+# 📱 REACT NATIVE (Mobile)
+# ========================
+# node modules
+mobile/node_modules/
+
+# expo
+mobile/.expo/
+mobile/.expo-shared/
+
+# android
+mobile/android/.gradle/
+mobile/android/app/build/
+mobile/android/build/
+
+# ios
+mobile/ios/build/
+mobile/ios/Pods/
+mobile/ios/DerivedData/
+
+# metro bundler
+mobile/.metro-health-check*
+
+# logs
+mobile/*.log
+
+# ========================
+# 🧪 TEST
+# ========================
+coverage/
+
+# ========================
+# 🔑 SECRETS
+# ========================
+*.pem
+*.key
+*.cert

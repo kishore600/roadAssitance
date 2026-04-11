@@ -10,19 +10,28 @@ import {
 export const bookingsRouter = Router();
 
 bookingsRouter.post('/', async (req, res) => {
-  const payload = {
-    customer_id: req.body.customerId,
-    mechanic_id: req.body.mechanicId || null,
-    service_id: req.body.serviceId,
-    issue_note: req.body.issueNote,
-    customer_lat: req.body.customerLat,
-    customer_lng: req.body.customerLng,
-    customer_address: req.body.customerAddress,
-    amount: 299
-  };
+  try {
+    const payload = {
+      customer_id: req.body.customerId,
+      mechanic_id: req.body.mechanicId || null,
+      service_id: req.body.serviceId,
+      issue_note: req.body.issueNote,
+      customer_lat: req.body.customerLat,
+      customer_lng: req.body.customerLng,
+      customer_address: req.body.customerAddress,
+      amount: 299
+    };
 
-  const data = await createBooking(payload);
-  res.status(201).json(data);
+    const data = await createBooking(payload);
+    res.status(201).json(data);
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: 'Failed to create booking',
+      error: err
+    });
+  }
 });
 
 bookingsRouter.get('/customer/:customerId', async (req, res) => {
