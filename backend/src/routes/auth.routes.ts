@@ -5,7 +5,6 @@ import { signToken } from '../utils/jwt';
 
 export const authRouter = Router();
 
-// 🔥 SIGNUP
 authRouter.post('/signup', async (req, res) => {
   try {
     const { email, password, fullName, role, phone } = req.body;
@@ -21,7 +20,7 @@ authRouter.post('/signup', async (req, res) => {
         role,
         phone 
       })
-      .select('*')
+      .select('id, email, full_name, role, phone')
       .single();
 
     if (error) {
@@ -31,12 +30,19 @@ authRouter.post('/signup', async (req, res) => {
 
     const token = signToken({ id: data.id, role: data.role });
 
+    // Set cookie with token
     res.cookie('token', token, {
       httpOnly: true,
-      secure: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
     });
 
-    res.json({ user: data });
+    res.json({ 
+      success: true,
+      token,
+      user: data 
+    });
 
   } catch (err: any) {
     console.error('Signup error:', err);
@@ -44,14 +50,13 @@ authRouter.post('/signup', async (req, res) => {
   }
 });
 
-// 🔥 LOGIN
 authRouter.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
     const { data, error } = await supabaseAdmin
       .from('profiles')
-      .select('*')
+      .select('id, email, full_name, role, phone, password')
       .eq('email', email)
       .single();
 
@@ -66,15 +71,30 @@ authRouter.post('/login', async (req, res) => {
 
     const token = signToken({ id: data.id, role: data.role });
 
+    // Set cookie with token
     res.cookie('token', token, {
       httpOnly: true,
-      secure: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
     });
 
-    res.json({ user: data });
+    const { password: _, ...userWithoutPassword } = data;
+    
+    res.json({ 
+      success: true,
+      token,
+      user: userWithoutPassword 
+    });
 
   } catch (err: any) {
     console.error('Login error:', err);
     res.status(500).json({ error: err.message || 'Login failed' });
   }
+});
+
+// Logout endpoint to clear cookie
+authRouter.post('/logout', async (req, res) => {
+  res.clearCookie('token');
+  res.json({ success: true, message: 'Logged out successfully' });
 });

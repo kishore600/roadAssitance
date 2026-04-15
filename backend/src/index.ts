@@ -1,3 +1,4 @@
+// server/index.js or app.js
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -18,25 +19,37 @@ app.use(cookieParser());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: '*'
+    origin: '*',
+    credentials: true
   }
 });
 
+// Initialize socket with all event handlers
 initSocket(io);
 
-app.use(cors({ origin: '*' }));
+app.use(cors({ origin: '*', credentials: true }));
 app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json());
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't crash the server, just log it
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // Don't crash the server, just log it
+});
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'roadside-assistance-api' });
 });
 
-app.use('/services', servicesRouter);
-app.use('/auth', authRouter);
-app.use('/bookings',authMiddleware, bookingsRouter);
-app.use('/mechanics',authMiddleware, mechanicsRouter);
+app.use('/api/services', servicesRouter);
+app.use('/api/auth', authRouter);
+app.use('/api/bookings', authMiddleware, bookingsRouter);
+app.use('/api/mechanics', authMiddleware, mechanicsRouter);
 
 server.listen(env.port, () => {
   console.log(`API running on http://localhost:${env.port}`);
