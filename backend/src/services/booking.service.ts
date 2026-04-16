@@ -1,14 +1,18 @@
+// services/booking.service.ts
+
 import { supabaseAdmin } from '../config/supabase';
-import { emitBookingUpdate,emitMechanicLocation } from '../socket';
+import { emitBookingUpdate, emitMechanicLocation, emitNewBooking } from '../socket'; // Add emitNewBooking import
+
+// Store active timers
+const activeBookingTimers = new Map<string, NodeJS.Timeout>();
 
 export async function getServices() {
   const { data, error } = await supabaseAdmin.from('services').select('*').order('name');
   if (error) throw error;
   return data;
 }
-// name chnage 2
+
 export async function getNearbyMechanics(customerLat?: number, customerLng?: number, radiusKm: number = 10) {
-  // First get all mechanics
   const { data, error } = await supabaseAdmin
     .from('profiles')
     .select('id, full_name, mechanic_status(is_online, vehicle_type, current_lat, current_lng)')
@@ -16,7 +20,6 @@ export async function getNearbyMechanics(customerLat?: number, customerLng?: num
 
   if (error) throw error;
 
-  // Process mechanics data
   let mechanics = (data || [])
     .map((item: any) => ({
       id: item.id,
@@ -29,7 +32,6 @@ export async function getNearbyMechanics(customerLat?: number, customerLng?: num
     }))
     .filter((item) => item.is_online && item.current_lat && item.current_lng);
 
-  // Calculate distance if customer location is provided
   if (customerLat && customerLng && mechanics.length > 0) {
     mechanics = mechanics.map(mechanic => {
       const distance = calculateDistance(
@@ -44,7 +46,6 @@ export async function getNearbyMechanics(customerLat?: number, customerLng?: num
       };
     });
     
-    // Filter by radius and sort by distance
     mechanics = mechanics
       .filter(mechanic => mechanic.distance_km! <= radiusKm)
       .sort((a, b) => (a.distance_km || Infinity) - (b.distance_km || Infinity));
@@ -53,9 +54,8 @@ export async function getNearbyMechanics(customerLat?: number, customerLng?: num
   return mechanics;
 }
 
-// Helper function to calculate distance between two points (in km)
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371; // Earth's radius in km
+  const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = 
@@ -67,19 +67,145 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 }
 
 export async function createBooking(payload: any) {
- payload.status = 'requested';
-  payload.mechanic_id = null; 
+  payload.status = 'requested';
+  payload.mechanic_id = null;
 
   const { data, error } = await supabaseAdmin
     .from('bookings')
     .insert(payload)
-    .select('*')
+    .select(`
+      *,
+      customer:profiles!bookings_customer_id_fkey(
+        full_name,
+        email,
+        phone
+      ),
+      service:services(
+        id,
+        name,
+        base_price
+      )
+    `)
     .single();
 
   if (error) throw error;
 
-  emitBookingUpdate(data.id, data);
+  // Start auto-cancellation timer
+  startAutoCancelTimer(data.id);
 
+  // Emit to customer who created the booking
+  emitBookingUpdate(data.id, data);
+  
+  // IMPORTANT: Emit to all mechanics for new booking
+  emitNewBooking(data);
+
+  return data;
+}
+
+function startAutoCancelTimer(bookingId: string) {
+  if (activeBookingTimers.has(bookingId)) {
+    clearTimeout(activeBookingTimers.get(bookingId));
+  }
+
+  const timer = setTimeout(async () => {
+    await autoCancelBooking(bookingId);
+  }, 120000);
+
+  activeBookingTimers.set(bookingId, timer);
+  
+  console.log(`⏰ Auto-cancel timer started for booking ${bookingId} (2 minutes)`);
+}
+
+async function autoCancelBooking(bookingId: string) {
+  try {
+    const { data: booking, error: fetchError } = await supabaseAdmin
+      .from('bookings')
+      .select('status')
+      .eq('id', bookingId)
+      .single();
+
+    if (fetchError) {
+      console.error(`Error fetching booking ${bookingId}:`, fetchError);
+      return;
+    }
+
+    if (booking && booking.status === 'requested') {
+      const { data, error } = await supabaseAdmin
+        .from('bookings')
+        .update({ 
+          status: 'cancelled', 
+          updated_at: new Date().toISOString(),
+          cancellation_reason: 'auto_cancelled_no_mechanic'
+        })
+        .eq('id', bookingId)
+        .select('*')
+        .single();
+
+      if (error) {
+        console.error(`Error auto-cancelling booking ${bookingId}:`, error);
+        return;
+      }
+
+      console.log(`⏰ Auto-cancelled booking ${bookingId} - No mechanic accepted within 30 seconds`);
+      
+      emitBookingUpdate(bookingId, {
+        ...data,
+        auto_cancelled: true,
+        reason: 'No mechanic accepted your request within 30 seconds'
+      });
+      
+      // Emit to mechanics that booking is cancelled
+      emitNewBooking({ ...data, status: 'cancelled', auto_cancelled: true });
+    }
+  } catch (error) {
+    console.error(`Auto-cancel failed for booking ${bookingId}:`, error);
+  } finally {
+    activeBookingTimers.delete(bookingId);
+  }
+}
+
+export async function cancelAutoCancelTimer(bookingId: string) {
+  if (activeBookingTimers.has(bookingId)) {
+    clearTimeout(activeBookingTimers.get(bookingId));
+    activeBookingTimers.delete(bookingId);
+    console.log(`✅ Auto-cancel timer cancelled for booking ${bookingId}`);
+  }
+}
+
+export async function assignMechanic(bookingId: string, mechanicId: string, etaMinutes: number) {
+  await cancelAutoCancelTimer(bookingId);
+
+  const { data, error } = await supabaseAdmin
+    .from('bookings')
+    .update({ 
+      mechanic_id: mechanicId, 
+      status: 'accepted', 
+      eta_minutes: etaMinutes, 
+      updated_at: new Date().toISOString() 
+    })
+    .eq('id', bookingId)
+    .select(`
+      *,
+      customer:profiles!bookings_customer_id_fkey(
+        full_name, 
+        email,
+        phone
+      ),
+      mechanic:profiles!bookings_mechanic_id_fkey(
+        full_name, 
+        email,
+        phone
+      ),
+      service:services(
+        id,
+        name,
+        base_price
+      )
+    `)
+    .single();
+  
+  if (error) throw error;
+  emitBookingUpdate(bookingId, data);
   return data;
 }
 
@@ -104,7 +230,6 @@ export async function getBookingById(bookingId: string) {
   return data;
 }
 
-
 export async function getMechanicCurrentBooking(mechanicId: string) {
   const { data, error } = await supabaseAdmin
     .from('bookings')
@@ -128,7 +253,7 @@ export async function getCustomerBookings(customerId: string) {
       ),
       service:services(
         name, 
-        price
+        base_price
       )
     `)
     .eq('customer_id', customerId)
@@ -144,43 +269,18 @@ export async function getOpenBookings() {
       *,
       customer:profiles!bookings_customer_id_fkey(
         full_name, 
-        email
+        email,
+        phone
       ),
       service:services(
+        id,
         name, 
-        price
+        base_price
       )
     `)
     .eq('status', 'requested')
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return data;
-}
-
-export async function assignMechanic(bookingId: string, mechanicId: string, etaMinutes: number) {
-  const { data, error } = await supabaseAdmin
-    .from('bookings')
-    .update({ 
-      mechanic_id: mechanicId, 
-      status: 'accepted', 
-      eta_minutes: etaMinutes, 
-      updated_at: new Date().toISOString() 
-    })
-    .eq('id', bookingId)
-    .select(`
-      *,
-      customer:profiles!bookings_customer_id_fkey(
-        full_name, 
-        email
-      ),
-      mechanic:profiles!bookings_mechanic_id_fkey(
-        full_name, 
-        email
-      )
-    `)
-    .single();
-  if (error) throw error;
-  emitBookingUpdate(bookingId, data);
   return data;
 }
 
@@ -240,7 +340,7 @@ export async function updateMechanicLocation(mechanicId: string, lat: number, ln
 }
 
 function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6371; // km
+  const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
 
@@ -270,7 +370,7 @@ export async function findNearestMechanic(lat: number, lng: number) {
 
     const dist = getDistance(lat, lng, mech.current_lat, mech.current_lng);
 
-if (dist < 5 && dist < minDistance) {
+    if (dist < 5 && dist < minDistance) {
       minDistance = dist;
       nearest = mech;
     }
@@ -279,8 +379,9 @@ if (dist < 5 && dist < minDistance) {
   return nearest;
 }
 
-export async function cancelBooking(bookingId: string) {
-  // First get the current booking
+export async function cancelBooking(bookingId: string, reason?: string) {
+  await cancelAutoCancelTimer(bookingId);
+
   const { data: booking, error: fetchError } = await supabaseAdmin
     .from('bookings')
     .select('status')
@@ -289,17 +390,16 @@ export async function cancelBooking(bookingId: string) {
   
   if (fetchError) throw fetchError;
   
-  // Only allow cancellation of requested or accepted bookings
   if (booking.status !== 'requested' && booking.status !== 'accepted') {
     throw new Error('Only requested or accepted bookings can be cancelled');
   }
   
-  // Update status to cancelled
   const { data, error } = await supabaseAdmin
     .from('bookings')
     .update({ 
       status: 'cancelled', 
-      updated_at: new Date().toISOString() 
+      updated_at: new Date().toISOString(),
+      cancellation_reason: reason || 'user_cancelled'
     })
     .eq('id', bookingId)
     .select('*')
@@ -310,11 +410,8 @@ export async function cancelBooking(bookingId: string) {
   return data;
 }
 
-// services/booking.service.js
-
-export async function deleteBooking(bookingId:any) {
+export async function deleteBooking(bookingId: any) {
   try {
-    // First get the current booking
     const { data: booking, error: fetchError } = await supabaseAdmin
       .from('bookings')
       .select('status')
@@ -332,14 +429,12 @@ export async function deleteBooking(bookingId:any) {
     
     console.log('Deleting booking with status:', booking.status);
     
-    // Define which statuses can be deleted
     const deletableStatuses = ['completed', 'cancelled', 'rejected'];
     
     if (!deletableStatuses.includes(booking.status)) {
       throw new Error(`Cannot delete booking with status '${booking.status}'. Only completed, cancelled, or rejected bookings can be deleted.`);
     }
     
-    // Delete the booking
     const { error: deleteError } = await supabaseAdmin
       .from('bookings')
       .delete()
@@ -350,30 +445,25 @@ export async function deleteBooking(bookingId:any) {
       throw new Error(`Failed to delete booking: ${deleteError.message}`);
     }
     
-    // Emit deletion event (wrap in try-catch to avoid breaking the main flow)
     try {
       emitBookingUpdate(bookingId, { deleted: true, id: bookingId });
     } catch (emitError) {
       console.warn('Failed to emit deletion event:', emitError);
-      // Don't throw, just warn
     }
     
     return { success: true, message: 'Booking deleted successfully' };
     
-  } catch (error:any) {
+  } catch (error: any) {
     console.error('Error in deleteBooking function:', error);
-    // Re-throw with a clear message
     throw new Error(error.message || 'Failed to delete booking');
   }
 }
 
-// Update booking (edit issue_note and other editable fields)
 export async function updateBooking(bookingId: string, updateData: { 
   issue_note?: string;
   customer_address?: string;
   updated_at: string;
 }) {
-  // First get the current booking to check status
   const { data: booking, error: fetchError } = await supabaseAdmin
     .from('bookings')
     .select('status')
@@ -382,7 +472,6 @@ export async function updateBooking(bookingId: string, updateData: {
   
   if (fetchError) throw fetchError;
   
-  // Only allow updates for non-completed and non-cancelled bookings
   if (booking.status === 'completed') {
     throw new Error('Cannot update a completed booking');
   }
@@ -391,7 +480,6 @@ export async function updateBooking(bookingId: string, updateData: {
     throw new Error('Cannot update a cancelled booking');
   }
   
-  // Update the booking
   const { data, error } = await supabaseAdmin
     .from('bookings')
     .update(updateData)
@@ -401,13 +489,11 @@ export async function updateBooking(bookingId: string, updateData: {
   
   if (error) throw error;
   
-  // Emit update event for real-time updates
   emitBookingUpdate(bookingId, data);
   
   return data;
 }
 
-// Add this function if it's missing
 export async function getMechanicBookings(mechanicId: any) {
   const { data, error } = await supabaseAdmin
     .from('bookings')
@@ -419,7 +505,7 @@ export async function getMechanicBookings(mechanicId: any) {
       ),
       service:services(
         name, 
-        price
+        base_price
       )
     `)
     .eq('mechanic_id', mechanicId)
@@ -427,4 +513,27 @@ export async function getMechanicBookings(mechanicId: any) {
   
   if (error) throw error;
   return data || [];
+}
+
+export async function cleanupExpiredBookings() {
+  console.log('🧹 Cleaning up expired bookings...');
+  
+  const twoMins_ago = new Date(Date.now() - 120000).toISOString();
+  
+  const { data: expiredBookings, error } = await supabaseAdmin
+    .from('bookings')
+    .select('id')
+    .eq('status', 'requested')
+    .lt('created_at', twoMins_ago);
+
+  if (error) {
+    console.error('Error fetching expired bookings:', error);
+    return;
+  }
+
+  for (const booking of expiredBookings || []) {
+    await autoCancelBooking(booking.id);
+  }
+  
+  console.log(`✅ Cleaned up ${expiredBookings?.length || 0} expired bookings`);
 }

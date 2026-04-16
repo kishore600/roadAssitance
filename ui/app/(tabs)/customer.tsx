@@ -1,3 +1,5 @@
+// app/customer/index.tsx or CustomerScreen.tsx
+
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   Alert,
@@ -58,6 +60,10 @@ export default function CustomerScreen() {
     null,
   );
   const { user, logout } = useAuth();
+  const [timeRemaining, setTimeRemaining] = useState<number>(120);
+  const [timerInterval, setTimerInterval] = useState<NodeJS.Timeout | null>(
+    null,
+  );
 
   const locationUpdateInterval = useRef<any>(null);
 
@@ -69,8 +75,6 @@ export default function CustomerScreen() {
       }
     }, [user]),
   );
-
-  // In CustomerScreen.tsx - Update the useEffect and add new socket listeners
 
   useEffect(() => {
     if (user && !activeBooking) {
@@ -166,33 +170,60 @@ export default function CustomerScreen() {
       },
     );
 
-    // Original booking:updated listener (keep for backup)
-    socket.on("booking:updated", (updatedBooking: Booking) => {
-      console.log("Booking updated:", updatedBooking);
+    // Original booking:updated listener with auto-cancellation handling
+    socket.on(
+      "booking:updated",
+      (
+        updatedBooking: Booking & { auto_cancelled?: boolean; reason?: string },
+      ) => {
+        console.log("Booking updated:", updatedBooking);
 
-      if (updatedBooking.id === activeBooking?.id) {
-        setActiveBooking(updatedBooking);
-
+        // Handle auto-cancellation
         if (
-          updatedBooking.status === "accepted" &&
-          updatedBooking.mechanic_id
+          updatedBooking.id === activeBooking?.id &&
+          updatedBooking.status === "cancelled" &&
+          updatedBooking.auto_cancelled
         ) {
           setWaitingForMechanic(false);
-          startTrackingMechanic(updatedBooking);
-        }
+          setActiveBooking(null);
 
-        if (
-          updatedBooking.status === "completed" ||
-          updatedBooking.status === "cancelled"
-        ) {
-          setTimeout(() => {
-            setActiveBooking(null);
+          Alert.alert(
+            "⏰ Request Expired",
+            updatedBooking.reason ||
+              "No mechanic accepted your request within 30 seconds. Please try again.",
+            [
+              {
+                text: "OK",
+                onPress: () => {
+                  loadBookings();
+                },
+              },
+            ],
+          );
+        } else if (updatedBooking.id === activeBooking?.id) {
+          setActiveBooking(updatedBooking);
+
+          if (
+            updatedBooking.status === "accepted" &&
+            updatedBooking.mechanic_id
+          ) {
             setWaitingForMechanic(false);
-            loadBookings();
-          }, 3000);
+            startTrackingMechanic(updatedBooking);
+          }
+
+          if (
+            updatedBooking.status === "completed" ||
+            updatedBooking.status === "cancelled"
+          ) {
+            setTimeout(() => {
+              setActiveBooking(null);
+              setWaitingForMechanic(false);
+              loadBookings();
+            }, 3000);
+          }
         }
-      }
-    });
+      },
+    );
 
     return () => {
       socket.off("booking:accepted");
@@ -202,8 +233,41 @@ export default function CustomerScreen() {
       if (locationUpdateInterval.current) {
         clearInterval(locationUpdateInterval.current);
       }
+      if (timerInterval) {
+        clearInterval(timerInterval);
+      }
     };
   }, [user, activeBooking]);
+
+  // Timer effect for waiting screen
+  useEffect(() => {
+    if (waitingForMechanic && activeBooking) {
+      // Reset timer
+      setTimeRemaining(30);
+
+      // Start countdown
+      const interval: any = setInterval(() => {
+        setTimeRemaining((prev) => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      setTimerInterval(interval);
+
+      return () => {
+        if (interval) clearInterval(interval);
+      };
+    } else {
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        setTimerInterval(null);
+      }
+    }
+  }, [waitingForMechanic, activeBooking]);
 
   async function checkActiveBooking() {
     try {
@@ -316,7 +380,7 @@ export default function CustomerScreen() {
     try {
       const payload = {
         customerId: user.id,
-        mechanicId: null, // No mechanic selected
+        mechanicId: null,
         serviceId: service.id,
         issueNote: issueNote || `${service.name} assistance needed`,
         customerLat: coords.latitude,
@@ -345,11 +409,9 @@ export default function CustomerScreen() {
   }
 
   function startTrackingMechanic(booking: Booking) {
-    // Join mechanic's room for location updates
     if (booking.mechanic_id) {
       socket.emit("join:mechanic", booking.mechanic_id);
 
-      // Listen for mechanic location updates
       socket.on(
         `mechanic:location:${booking.mechanic_id}`,
         (location: { lat: number; lng: number }) => {
@@ -397,8 +459,28 @@ export default function CustomerScreen() {
       { text: "Logout", onPress: () => logout() },
     ]);
   }
+  useEffect(() => {
+    if (!waitingForMechanic) return;
 
-  // Render waiting screen
+    // Reset timer when modal opens
+    setTimeRemaining(120);
+
+    const timer = setInterval(() => {
+      setTimeRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          // Auto cancel when time ends
+          cancelActiveBooking();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [waitingForMechanic]);
+
+  // Render waiting screen with timer
   const renderWaitingScreen = () => (
     <Modal
       visible={waitingForMechanic}
@@ -408,9 +490,29 @@ export default function CustomerScreen() {
       <SafeAreaView style={styles.waitingContainer}>
         <View style={styles.waitingContent}>
           <ActivityIndicator size="large" color="#0F172A" />
+
+          {/* Timer Display - 2 Minute Countdown */}
+          <View style={styles.timerContainer}>
+            <Text style={styles.timerText}>
+              {Math.floor(timeRemaining / 60)}:
+              {(timeRemaining % 60).toString().padStart(2, "0")}
+            </Text>
+            <Text style={styles.timerLabel}>Time remaining</Text>
+            <View style={styles.timerProgress}>
+              <View
+                style={[
+                  styles.timerProgressFill,
+                  { width: `${(timeRemaining / 120) * 100}%` },
+                ]}
+              />
+            </View>
+          </View>
+
           <Text style={styles.waitingTitle}>Finding a mechanic...</Text>
           <Text style={styles.waitingText}>
-            Looking for available mechanics near you
+            {timeRemaining > 0
+              ? `Auto-cancels in ${Math.floor(timeRemaining / 60)} minute${Math.floor(timeRemaining / 60) !== 1 ? "s" : ""} and ${timeRemaining % 60} second${timeRemaining % 60 !== 1 ? "s" : ""} if no mechanic accepts`
+              : "Expiring request..."}
           </Text>
 
           {selectedService && (
@@ -435,135 +537,164 @@ export default function CustomerScreen() {
     </Modal>
   );
 
-const renderTrackingScreen = () => {
-  if (!activeBooking || activeBooking.status === 'requested') return null;
-  
-  const distance = activeBooking.mechanic_location && coords
-    ? calculateDistance(
-        coords.latitude,
-        coords.longitude,
-        activeBooking.mechanic_location.lat,
-        activeBooking.mechanic_location.lng
-      )
-    : null;
-  
-  // Animated progress based on status
-  const getProgressPercentage = () => {
-    switch(activeBooking.status) {
-      case 'accepted': return 25;
-      case 'on_the_way': return 50;
-      case 'arrived': return 75;
-      case 'completed': return 100;
-      default: return 0;
-    }
-  };
-  
-  return (
-    <Modal visible={!!activeBooking} transparent={false} animationType="slide">
-      <SafeAreaView style={styles.trackingContainer}>
-        <View style={styles.trackingHeader}>
-          <Text style={styles.trackingTitle}>
-            {activeBooking.status === 'accepted' && '✓ Mechanic Assigned!'}
-            {activeBooking.status === 'on_the_way' && '🚗 Mechanic is Coming!'}
-            {activeBooking.status === 'arrived' && '📍 Mechanic Has Arrived!'}
-            {activeBooking.status === 'completed' && '✅ Service Completed!'}
-            {activeBooking.status === 'cancelled' && '❌ Request Cancelled'}
-          </Text>
-          
-          {(activeBooking.status === 'completed' || activeBooking.status === 'cancelled') && (
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => {
-                setActiveBooking(null);
-                loadBookings();
-              }}
-            >
-              <Text style={styles.closeButtonText}>Close</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-        
-        {activeBooking.status !== 'completed' && activeBooking.status !== 'cancelled' && (
-          <>
-            <View style={styles.mechanicInfoCard}>
-              <View style={styles.mechanicAvatar}>
-                <Text style={styles.avatarText}>
-                  {activeBooking.mechanic?.full_name?.charAt(0) || 'M'}
-                </Text>
-              </View>
-              <Text style={styles.mechanicName}>
-                {activeBooking.mechanic?.full_name || 'Mechanic Assigned'}
-              </Text>
-              <Text style={styles.mechanicStatus}>
-                Status: {activeBooking.status?.replace('_', ' ').toUpperCase()}
-              </Text>
-              {distance !== null && (
-                <View style={styles.distanceContainer}>
-                  <Text style={styles.distanceText}>
-                    📍 {distance < 1 
-                      ? `${Math.round(distance * 1000)} meters away`
-                      : `${distance.toFixed(1)} km away`}
-                  </Text>
-                  {activeBooking.eta_minutes && (
-                    <Text style={styles.etaText}>
-                      ⏱️ ETA: ~{activeBooking.eta_minutes} minutes
+  const renderTrackingScreen = () => {
+    if (!activeBooking || activeBooking.status === "requested") return null;
+
+    const distance =
+      activeBooking.mechanic_location && coords
+        ? calculateDistance(
+            coords.latitude,
+            coords.longitude,
+            activeBooking.mechanic_location.lat,
+            activeBooking.mechanic_location.lng,
+          )
+        : null;
+
+    const getProgressPercentage = () => {
+      switch (activeBooking.status) {
+        case "accepted":
+          return 25;
+        case "on_the_way":
+          return 50;
+        case "arrived":
+          return 75;
+        case "completed":
+          return 100;
+        default:
+          return 0;
+      }
+    };
+
+    return (
+      <Modal
+        visible={!!activeBooking}
+        transparent={false}
+        animationType="slide"
+      >
+        <SafeAreaView style={styles.trackingContainer}>
+          <View style={styles.trackingHeader}>
+            <Text style={styles.trackingTitle}>
+              {activeBooking.status === "accepted" && "✓ Mechanic Assigned!"}
+              {activeBooking.status === "on_the_way" &&
+                "🚗 Mechanic is Coming!"}
+              {activeBooking.status === "arrived" && "📍 Mechanic Has Arrived!"}
+              {activeBooking.status === "completed" && "✅ Service Completed!"}
+              {activeBooking.status === "cancelled" && "❌ Request Cancelled"}
+            </Text>
+
+            {(activeBooking.status === "completed" ||
+              activeBooking.status === "cancelled") && (
+              <TouchableOpacity
+                style={styles.closeButton}
+                onPress={() => {
+                  setActiveBooking(null);
+                  loadBookings();
+                }}
+              >
+                <Text style={styles.closeButtonText}>Close</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {activeBooking.status !== "completed" &&
+            activeBooking.status !== "cancelled" && (
+              <>
+                <View style={styles.mechanicInfoCard}>
+                  <View style={styles.mechanicAvatar}>
+                    <Text style={styles.avatarText}>
+                      {activeBooking.mechanic?.full_name?.charAt(0) || "M"}
                     </Text>
+                  </View>
+                  <Text style={styles.mechanicName}>
+                    {activeBooking.mechanic?.full_name || "Mechanic Assigned"}
+                  </Text>
+                  <Text style={styles.mechanicStatus}>
+                    Status:{" "}
+                    {activeBooking.status?.replace("_", " ").toUpperCase()}
+                  </Text>
+                  {distance !== null && (
+                    <View style={styles.distanceContainer}>
+                      <Text style={styles.distanceText}>
+                        📍{" "}
+                        {distance < 1
+                          ? `${Math.round(distance * 1000)} meters away`
+                          : `${distance.toFixed(1)} km away`}
+                      </Text>
+                      {activeBooking.eta_minutes && (
+                        <Text style={styles.etaText}>
+                          ⏱️ ETA: ~{activeBooking.eta_minutes} minutes
+                        </Text>
+                      )}
+                    </View>
                   )}
                 </View>
-              )}
-            </View>
-            
-            {/* Progress Bar */}
-            <View style={styles.progressContainer}>
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, { width: `${getProgressPercentage()}%` }]} />
-              </View>
-              <View style={styles.progressSteps}>
-                <View style={styles.stepItem}>
-                  <View style={[
-                    styles.stepCircle,
-                    (activeBooking.status === 'accepted' || 
-                     activeBooking.status === 'on_the_way' || 
-                     activeBooking.status === 'arrived') && styles.stepActive
-                  ]}>
-                    <Text style={styles.stepNumber}>1</Text>
+
+                <View style={styles.progressContainer}>
+                  <View style={styles.progressBarBg}>
+                    <View
+                      style={[
+                        styles.progressBarFill,
+                        { width: `${getProgressPercentage()}%` },
+                      ]}
+                    />
                   </View>
-                  <Text style={styles.stepLabel}>Assigned</Text>
-                </View>
-                <View style={styles.stepItem}>
-                  <View style={[
-                    styles.stepCircle,
-                    (activeBooking.status === 'on_the_way' || 
-                     activeBooking.status === 'arrived') && styles.stepActive
-                  ]}>
-                    <Text style={styles.stepNumber}>2</Text>
+                  <View style={styles.progressSteps}>
+                    <View style={styles.stepItem}>
+                      <View
+                        style={[
+                          styles.stepCircle,
+                          (activeBooking.status === "accepted" ||
+                            activeBooking.status === "on_the_way" ||
+                            activeBooking.status === "arrived") &&
+                            styles.stepActive,
+                        ]}
+                      >
+                        <Text style={styles.stepNumber}>1</Text>
+                      </View>
+                      <Text style={styles.stepLabel}>Assigned</Text>
+                    </View>
+                    <View style={styles.stepItem}>
+                      <View
+                        style={[
+                          styles.stepCircle,
+                          (activeBooking.status === "on_the_way" ||
+                            activeBooking.status === "arrived") &&
+                            styles.stepActive,
+                        ]}
+                      >
+                        <Text style={styles.stepNumber}>2</Text>
+                      </View>
+                      <Text style={styles.stepLabel}>On The Way</Text>
+                    </View>
+                    <View style={styles.stepItem}>
+                      <View
+                        style={[
+                          styles.stepCircle,
+                          activeBooking.status === "arrived" &&
+                            styles.stepActive,
+                        ]}
+                      >
+                        <Text style={styles.stepNumber}>3</Text>
+                      </View>
+                      <Text style={styles.stepLabel}>Arrived</Text>
+                    </View>
                   </View>
-                  <Text style={styles.stepLabel}>On The Way</Text>
                 </View>
-                <View style={styles.stepItem}>
-                  <View style={[
-                    styles.stepCircle,
-                    activeBooking.status === 'arrived' && styles.stepActive
-                  ]}>
-                    <Text style={styles.stepNumber}>3</Text>
-                  </View>
-                  <Text style={styles.stepLabel}>Arrived</Text>
-                </View>
-              </View>
-            </View>
-            
-            <TouchableOpacity
-              style={styles.cancelTrackingButton}
-              onPress={cancelActiveBooking}
-            >
-              <Text style={styles.cancelTrackingButtonText}>Cancel Service</Text>
-            </TouchableOpacity>
-          </>
-        )}
-      </SafeAreaView>
-    </Modal>
-  );
-};
+
+                <TouchableOpacity
+                  style={styles.cancelTrackingButton}
+                  onPress={cancelActiveBooking}
+                >
+                  <Text style={styles.cancelTrackingButtonText}>
+                    Cancel Service
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
+        </SafeAreaView>
+      </Modal>
+    );
+  };
 
   if (loading) {
     return (
@@ -667,6 +798,36 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
 
+  // Timer styles
+  timerContainer: {
+    alignItems: "center",
+    marginBottom: 24,
+  },
+  timerText: {
+    fontSize: 48,
+    fontWeight: "700",
+    color: "#0F172A",
+    fontFamily: "monospace",
+  },
+  timerLabel: {
+    fontSize: 14,
+    color: "#64748B",
+    marginTop: 4,
+  },
+  timerProgress: {
+    width: 200,
+    height: 4,
+    backgroundColor: "#E2E8F0",
+    borderRadius: 2,
+    marginTop: 12,
+    overflow: "hidden",
+  },
+  timerProgressFill: {
+    height: "100%",
+    backgroundColor: "#10B981",
+    borderRadius: 2,
+  },
+
   // Waiting screen styles
   waitingContainer: { flex: 1, backgroundColor: "#F1F5F9" },
   waitingContent: {
@@ -747,7 +908,6 @@ const styles = StyleSheet.create({
   },
   step: { alignItems: "center", flex: 1 },
   stepCompleted: { opacity: 1 },
-
   stepText: { fontSize: 12, color: "#64748B", textAlign: "center" },
   stepLine: {
     width: 40,
@@ -764,61 +924,61 @@ const styles = StyleSheet.create({
   },
   cancelTrackingButtonText: { color: "#FFF", fontSize: 16, fontWeight: "600" },
   mechanicAvatar: {
-  width: 80,
-  height: 80,
-  borderRadius: 40,
-  backgroundColor: '#0F172A',
-  justifyContent: 'center',
-  alignItems: 'center',
-  marginBottom: 12,
-},
-avatarText: {
-  fontSize: 32,
-  fontWeight: '700',
-  color: '#FFF',
-},
-distanceContainer: {
-  flexDirection: 'row',
-  justifyContent: 'space-between',
-  width: '100%',
-  marginTop: 12,
-  paddingHorizontal: 20,
-},
-progressBarBg: {
-  height: 8,
-  backgroundColor: '#E2E8F0',
-  borderRadius: 4,
-  overflow: 'hidden',
-  marginBottom: 24,
-},
-progressBarFill: {
-  height: '100%',
-  backgroundColor: '#10B981',
-  borderRadius: 4,
-},
-stepItem: {
-  alignItems: 'center',
-  flex: 1,
-},
-stepCircle: {
-  width: 40,
-  height: 40,
-  borderRadius: 20,
-  backgroundColor: '#E2E8F0',
-  justifyContent: 'center',
-  alignItems: 'center',
-  marginBottom: 8,
-},
-stepActive: {
-  backgroundColor: '#10B981',
-},
-stepNumber: {
-  fontSize: 16,
-  fontWeight: '700',
-  color: '#FFF',
-},
-stepLabel: {
-  fontSize: 12,
-  color: '#64748B',
-},
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "#0F172A",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  avatarText: {
+    fontSize: 32,
+    fontWeight: "700",
+    color: "#FFF",
+  },
+  distanceContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+    marginTop: 12,
+    paddingHorizontal: 20,
+  },
+  progressBarBg: {
+    height: 8,
+    backgroundColor: "#E2E8F0",
+    borderRadius: 4,
+    overflow: "hidden",
+    marginBottom: 24,
+  },
+  progressBarFill: {
+    height: "100%",
+    backgroundColor: "#10B981",
+    borderRadius: 4,
+  },
+  stepItem: {
+    alignItems: "center",
+    flex: 1,
+  },
+  stepCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#E2E8F0",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  stepActive: {
+    backgroundColor: "#10B981",
+  },
+  stepNumber: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#FFF",
+  },
+  stepLabel: {
+    fontSize: 12,
+    color: "#64748B",
+  },
 });

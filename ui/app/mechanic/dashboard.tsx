@@ -36,38 +36,63 @@ export default function MechanicDashboard() {
   const [accepting, setAccepting] = useState(false);
   const { user, logout } = useAuth();
 
-  useEffect(() => {
-    if (user) {
-      loadData();
-      getCurrentLocation();
-      startLocationTracking();
-    }
+// Add this inside your useEffect in MechanicDashboard
 
-    // Socket listener for new bookings
-    socket.on("booking:new", (booking: any) => {
-      console.log("New booking available:", booking);
-      Alert.alert(
-        "New Service Request!",
-        `A customer needs ${booking.service?.name || "assistance"}. Tap to view details.`,
-        [
-          {
-            text: "View",
-            onPress: () => {
-              setActiveTab("available");
-              loadOpenJobs();
-            },
-          },
-          { text: "Ignore", style: "cancel" },
-        ],
-      );
+useEffect(() => {
+  if (user) {
+    loadData();
+    getCurrentLocation();
+    startLocationTracking();
+  }
+
+  // Socket listener for new bookings
+  socket.on("booking:new", (booking: any) => {
+    console.log("New booking available:", booking);
+    
+    // Check if it's an auto-cancelled booking
+    if (booking.auto_cancelled || booking.status === 'cancelled') {
+      console.log("Booking was auto-cancelled:", booking);
+      // Reload jobs to remove cancelled booking from list
       loadOpenJobs();
-    });
+      return;
+    }
+    
+    Alert.alert(
+      "New Service Request!",
+      `A customer needs ${booking.service?.name || "assistance"}. Tap to view details.`,
+      [
+        {
+          text: "View",
+          onPress: () => {
+            setActiveTab("available");
+            loadOpenJobs();
+          },
+        },
+        { text: "Ignore", style: "cancel" },
+      ],
+    );
+    loadOpenJobs();
+  });
 
-    return () => {
-      socket.off("booking:new");
-      if (locationInterval) clearInterval(locationInterval);
-    };
-  }, [user]);
+  return () => {
+    socket.off("booking:new");
+    if (locationInterval) clearInterval(locationInterval);
+  };
+}, [user]);
+
+// Add this useEffect to periodically refresh jobs when online
+useEffect(() => {
+  if (online) {
+    // Refresh available jobs every 10 seconds when online
+    const refreshInterval = setInterval(() => {
+      if (activeTab === "available") {
+        loadOpenJobs();
+      }
+    }, 10000);
+    
+    return () => clearInterval(refreshInterval);
+  }
+}, [online, activeTab]);
 
   let locationInterval: any;
 
