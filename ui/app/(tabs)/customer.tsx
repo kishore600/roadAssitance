@@ -1,5 +1,4 @@
-// app/customer/index.tsx or CustomerScreen.tsx
-
+// app/customer/index.tsx
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   Alert,
@@ -17,10 +16,12 @@ import {
 import * as Location from "expo-location";
 import { ServiceCard } from "@/components/ServiceCard";
 import { api } from "@/lib/api";
-import { Booking, Mechanic, ServiceItem } from "@/types";
+import { Booking, Mechanic, ServiceItem, SavedLocation } from "@/types";
 import { socket } from "@/lib/socket";
 import { useAuth } from "@/context/AuthContext";
 import { router, useFocusEffect } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import { LocationPicker } from "@/components/LocationPicker";
 
 // Distance calculation function
 function calculateDistance(
@@ -64,6 +65,16 @@ export default function CustomerScreen() {
   const [timerInterval, setTimerInterval] = useState<NodeJS.Timeout | null>(
     null,
   );
+  
+  // Location picker states
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState<{
+    latitude: number;
+    longitude: number;
+    address: string;
+    isCurrentLocation?: boolean;
+    savedLocationId?: string;
+  } | null>(null);
 
   const locationUpdateInterval = useRef<any>(null);
 
@@ -89,9 +100,8 @@ export default function CustomerScreen() {
 
         if (data.booking.id === activeBooking?.id) {
           setActiveBooking(data.booking);
-          setWaitingForMechanic(false); // Close waiting modal
+          setWaitingForMechanic(false);
 
-          // Show immediate alert
           Alert.alert(
             "✓ Request Accepted!",
             `${data.mechanic.full_name} has accepted your request and is on the way.`,
@@ -103,7 +113,6 @@ export default function CustomerScreen() {
             ],
           );
 
-          // Start tracking mechanic
           startTrackingMechanic(data.booking);
         }
       },
@@ -116,7 +125,6 @@ export default function CustomerScreen() {
       if (updatedBooking.id === activeBooking?.id) {
         setActiveBooking(updatedBooking);
 
-        // Show status-specific alerts
         if (updatedBooking.status === "on_the_way") {
           Alert.alert(
             "🚗 Mechanic On The Way!",
@@ -148,7 +156,7 @@ export default function CustomerScreen() {
       }
     });
 
-    // Listen for mechanic location updates (realtime tracking)
+    // Listen for mechanic location updates
     socket.on(
       "mechanic:location:update",
       (data: {
@@ -170,7 +178,7 @@ export default function CustomerScreen() {
       },
     );
 
-    // Original booking:updated listener with auto-cancellation handling
+    // Original booking:updated listener
     socket.on(
       "booking:updated",
       (
@@ -178,7 +186,6 @@ export default function CustomerScreen() {
       ) => {
         console.log("Booking updated:", updatedBooking);
 
-        // Handle auto-cancellation
         if (
           updatedBooking.id === activeBooking?.id &&
           updatedBooking.status === "cancelled" &&
@@ -190,7 +197,7 @@ export default function CustomerScreen() {
           Alert.alert(
             "⏰ Request Expired",
             updatedBooking.reason ||
-              "No mechanic accepted your request within 30 seconds. Please try again.",
+              "No mechanic accepted your request. Please try again.",
             [
               {
                 text: "OK",
@@ -242,10 +249,8 @@ export default function CustomerScreen() {
   // Timer effect for waiting screen
   useEffect(() => {
     if (waitingForMechanic && activeBooking) {
-      // Reset timer
       setTimeRemaining(30);
 
-      // Start countdown
       const interval: any = setInterval(() => {
         setTimeRemaining((prev) => {
           if (prev <= 1) {
@@ -362,9 +367,30 @@ export default function CustomerScreen() {
     setRefreshing(false);
   }, []);
 
+  const handleLocationSelect = (location: {
+    latitude: number;
+    longitude: number;
+    address: string;
+    isCurrentLocation?: boolean;
+    savedLocationId?: string;
+  }) => {
+    setSelectedLocation(location);
+    setCoords({
+      latitude: location.latitude,
+      longitude: location.longitude,
+    });
+  };
+
   async function createBooking(service: ServiceItem) {
-    if (!coords) {
-      Alert.alert("Location missing", "Please enable your location first.");
+    const locationToUse = selectedLocation || (coords ? {
+      latitude: coords.latitude,
+      longitude: coords.longitude,
+      address: 'Live GPS location',
+      isCurrentLocation: true,
+    } : null);
+
+    if (!locationToUse) {
+      Alert.alert("Location missing", "Please select a location first.");
       return;
     }
 
@@ -383,10 +409,11 @@ export default function CustomerScreen() {
         mechanicId: null,
         serviceId: service.id,
         issueNote: issueNote || `${service.name} assistance needed`,
-        customerLat: coords.latitude,
-        customerLng: coords.longitude,
-        customerAddress: "Live GPS location",
+        customerLat: locationToUse.latitude,
+        customerLng: locationToUse.longitude,
+        customerAddress: locationToUse.address,
         status: "requested",
+        savedLocationId: locationToUse.savedLocationId,
       };
 
       const { data } = await api.post("/bookings", payload);
@@ -459,17 +486,16 @@ export default function CustomerScreen() {
       { text: "Logout", onPress: () => logout() },
     ]);
   }
+
   useEffect(() => {
     if (!waitingForMechanic) return;
 
-    // Reset timer when modal opens
     setTimeRemaining(120);
 
     const timer = setInterval(() => {
       setTimeRemaining((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          // Auto cancel when time ends
           cancelActiveBooking();
           return 0;
         }
@@ -480,7 +506,6 @@ export default function CustomerScreen() {
     return () => clearInterval(timer);
   }, [waitingForMechanic]);
 
-  // Render waiting screen with timer
   const renderWaitingScreen = () => (
     <Modal
       visible={waitingForMechanic}
@@ -491,7 +516,6 @@ export default function CustomerScreen() {
         <View style={styles.waitingContent}>
           <ActivityIndicator size="large" color="#0F172A" />
 
-          {/* Timer Display - 2 Minute Countdown */}
           <View style={styles.timerContainer}>
             <Text style={styles.timerText}>
               {Math.floor(timeRemaining / 60)}:
@@ -711,6 +735,17 @@ export default function CustomerScreen() {
     <SafeAreaView style={styles.container}>
       {renderWaitingScreen()}
       {renderTrackingScreen()}
+      
+      <LocationPicker
+        visible={showLocationPicker}
+        onClose={() => setShowLocationPicker(false)}
+        onSelectLocation={handleLocationSelect}
+        currentLocation={coords ? {
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          address: 'Current Location',
+        } : null}
+      />
 
       <FlatList
         data={services}
@@ -741,6 +776,23 @@ export default function CustomerScreen() {
                 <Text style={styles.logoutText}>Logout</Text>
               </TouchableOpacity>
             </View>
+
+            {/* Location Selector Button */}
+            <TouchableOpacity
+              style={styles.locationSelector}
+              onPress={() => setShowLocationPicker(true)}
+            >
+              <Ionicons name="location-outline" size={24} color="#0F172A" />
+              <View style={styles.locationSelectorText}>
+                <Text style={styles.locationSelectorLabel}>
+                  Service Location
+                </Text>
+                <Text style={styles.locationSelectorAddress} numberOfLines={1}>
+                  {selectedLocation?.address || (coords ? 'Current Location' : 'Select a location')}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#64748B" />
+            </TouchableOpacity>
 
             <TextInput
               style={styles.input}
@@ -782,6 +834,33 @@ const styles = StyleSheet.create({
   userInfo: { fontSize: 12, color: "#64748B", marginTop: 4 },
   logoutButton: { padding: 8 },
   logoutText: { color: "#EF4444", fontSize: 14, fontWeight: "600" },
+  
+  // Location selector styles
+  locationSelector: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFF",
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  locationSelectorText: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  locationSelectorLabel: {
+    fontSize: 12,
+    color: "#64748B",
+    marginBottom: 2,
+  },
+  locationSelectorAddress: {
+    fontSize: 14,
+    color: "#0F172A",
+    fontWeight: "500",
+  },
+  
   input: {
     backgroundColor: "#FFF",
     borderRadius: 14,

@@ -13,6 +13,7 @@ import { initSocket } from './socket';
 import cookieParser from 'cookie-parser';
 import { authMiddleware } from './middleware/auth';
 import { authRouter } from './routes/auth.routes';
+import savedLocationRouter from './routes/savedLocations.routes';
 
 const app = express();
 app.use(cookieParser());
@@ -50,6 +51,7 @@ app.use('/api/services', servicesRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/bookings', authMiddleware, bookingsRouter);
 app.use('/api/mechanics', authMiddleware, mechanicsRouter);
+app.use('/api/location', authMiddleware, savedLocationRouter);
 
 server.listen(env.port, () => {
   console.log(`API running on http://localhost:${env.port}`);
