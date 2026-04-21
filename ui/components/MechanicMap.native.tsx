@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import {
   View,
   StyleSheet,
@@ -6,336 +7,274 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  Dimensions,
-  RefreshControl,
 } from 'react-native';
-import MapView, { Marker, Callout, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
+import { Ionicons } from '@expo/vector-icons';
 import { api } from '@/lib/api';
 import { Mechanic } from '@/types';
-import { router } from 'expo-router';
-
-const { width, height } = Dimensions.get('window');
 
 interface MechanicMapProps {
   onMechanicSelect?: (mechanic: Mechanic) => void;
-  radiusKm?: number;
+  showNearbyMechanics?: boolean;
+  bookingId?: string;
+  mechanicLocation?: { latitude: number; longitude: number } | null;
+  customerLocation?: { latitude: number; longitude: number } | null;
+  isTracking?: boolean;
 }
 
-export function MechanicMap({ onMechanicSelect, radiusKm = 10 }: MechanicMapProps) {
-  const [mechanics, setMechanics] = useState<Mechanic[]>([]);
+export const MechanicMap: React.FC<MechanicMapProps> = ({
+  onMechanicSelect,
+  showNearbyMechanics = true,
+  bookingId,
+  mechanicLocation,
+  customerLocation,
+  isTracking = false,
+}) => {
+  const [userLocation, setUserLocation] = useState<Region | null>(null);
+  const [nearbyMechanics, setNearbyMechanics] = useState<Mechanic[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [userLocation, setUserLocation] = useState<{
-    latitude: number;
-    longitude: number;
-  } | null>(null);
   const [selectedMechanic, setSelectedMechanic] = useState<Mechanic | null>(null);
-  const [currentRadius, setCurrentRadius] = useState(radiusKm);
+  const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
   const mapRef = useRef<MapView>(null);
 
   useEffect(() => {
-    loadNearbyMechanics();
-  }, [currentRadius]);
+    getUserLocation();
+  }, []);
 
-  async function loadNearbyMechanics() {
+  useEffect(() => {
+    if (showNearbyMechanics && userLocation) {
+      fetchNearbyMechanics();
+      const interval = setInterval(fetchNearbyMechanics, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [userLocation, showNearbyMechanics]);
+
+  useEffect(() => {
+    if (isTracking && mechanicLocation && customerLocation) {
+      calculateRoute();
+      animateToFitBothLocations();
+    }
+  }, [mechanicLocation, customerLocation, isTracking]);
+
+  const getUserLocation = async () => {
     try {
-      // Request location permission
       const permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== 'granted') {
-        Alert.alert(
-          'Permission Required',
-          'Location permission is needed to find nearby mechanics.'
-        );
-        setLoading(false);
+        Alert.alert('Permission required', 'Please enable location to see nearby mechanics');
         return;
       }
 
-      // Get current location with high accuracy
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
-      
-      const userLoc = {
+
+      const region = {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
       };
-      setUserLocation(userLoc);
-
-      // Fetch nearby mechanics with customer location and radius
-      const { data } = await api.get('/mechanics/nearby', {
-        params: {
-          lat: userLoc.latitude,
-          lng: userLoc.longitude,
-          radiusKm: currentRadius,
-        },
-      });
+      setUserLocation(region);
       
-      console.log('Nearby mechanics within', currentRadius, 'km:', data);
-      
-      // Filter mechanics with valid coordinates and online status
-      const mechanicsWithLocation = data.filter(
-        (m: Mechanic) => m.current_lat && m.current_lng && m.is_online === true
-      );
-      
-      setMechanics(mechanicsWithLocation);
-
-      // Animate map to show all markers
-      if (mapRef.current && mechanicsWithLocation.length > 0) {
-        const coordinates = [
-          userLoc,
-          ...mechanicsWithLocation.map((m: Mechanic) => ({
-            latitude: m.current_lat!,
-            longitude: m.current_lng!,
-          })),
-        ];
-        mapRef.current.fitToCoordinates(coordinates, {
-          edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-          animated: true,
-        });
-      } else if (mapRef.current && userLoc) {
-        mapRef.current.animateToRegion({
-          ...userLoc,
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.05,
-        });
+      if (mapRef.current) {
+        mapRef.current.animateToRegion(region, 1000);
       }
     } catch (error) {
-      console.error('Failed to load mechanics:', error);
-      Alert.alert('Error', 'Failed to load nearby mechanics');
+      console.error('Error getting location:', error);
     } finally {
       setLoading(false);
-      setRefreshing(false);
-    }
-  }
-
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await loadNearbyMechanics();
-  }, [currentRadius]);
-
-  const handleMechanicPress = (mechanic: Mechanic) => {
-    setSelectedMechanic(mechanic);
-    if (onMechanicSelect) {
-      onMechanicSelect(mechanic);
     }
   };
 
-  const centerOnUser = () => {
-    if (userLocation && mapRef.current) {
-      mapRef.current.animateToRegion({
-        ...userLocation,
-        latitudeDelta: 0.02,
-        longitudeDelta: 0.02,
+  const fetchNearbyMechanics = async () => {
+    if (!userLocation) return;
+
+    try {
+      const { data } = await api.get('/mechanics/nearby', {
+        params: {
+          lat: userLocation.latitude,
+          lng: userLocation.longitude,
+          radiusKm: 10,
+        },
       });
+      setNearbyMechanics(data || []);
+    } catch (error) {
+      console.error('Error fetching mechanics:', error);
     }
   };
 
-  const changeRadius = (radius: number) => {
-    setCurrentRadius(radius);
-    setLoading(true);
-  };
+  const calculateRoute = async () => {
+    if (!mechanicLocation || !customerLocation) return;
 
-  // Calculate distance between user and mechanic
-  const getDistance = (mechanicLat: number, mechanicLng: number) => {
-    if (!userLocation) return null;
-    
-    const R = 6371; // Earth's radius in km
-    const dLat = (mechanicLat - userLocation.latitude) * Math.PI / 180;
-    const dLon = (mechanicLng - userLocation.longitude) * Math.PI / 180;
-    const a = 
-      Math.sin(dLat/2) * Math.sin(dLat/2) +
-      Math.cos(userLocation.latitude * Math.PI / 180) * 
-      Math.cos(mechanicLat * Math.PI / 180) * 
-      Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    const distance = R * c;
-    
-    if (distance < 1) {
-      return `${Math.round(distance * 1000)}m`;
+    try {
+      // Using OpenStreetMap's Routing API (free alternative to Google Maps)
+      const response = await fetch(
+        `https://router.project-osrm.org/route/v1/driving/${mechanicLocation.longitude},${mechanicLocation.latitude};${customerLocation.longitude},${customerLocation.latitude}?overview=full&geometries=geojson`
+      );
+      
+      const data = await response.json();
+      if (data.code === 'Ok' && data.routes.length > 0) {
+        const coordinates = data.routes[0].geometry.coordinates.map((coord: number[]) => ({
+          latitude: coord[1],
+          longitude: coord[0],
+        }));
+        setRouteCoordinates(coordinates);
+      }
+    } catch (error) {
+      console.error('Error calculating route:', error);
     }
-    return `${distance.toFixed(1)}km`;
   };
 
-  if (loading && !refreshing) {
+  const animateToFitBothLocations = () => {
+    if (mapRef.current && mechanicLocation && customerLocation) {
+      const minLat = Math.min(mechanicLocation.latitude, customerLocation.latitude);
+      const maxLat = Math.max(mechanicLocation.latitude, customerLocation.latitude);
+      const minLng = Math.min(mechanicLocation.longitude, customerLocation.longitude);
+      const maxLng = Math.max(mechanicLocation.longitude, customerLocation.longitude);
+      
+      const region = {
+        latitude: (minLat + maxLat) / 2,
+        longitude: (minLng + maxLng) / 2,
+        latitudeDelta: Math.abs(maxLat - minLat) * 1.5,
+        longitudeDelta: Math.abs(maxLng - minLng) * 1.5,
+      };
+      
+      mapRef.current.animateToRegion(region, 1000);
+    }
+  };
+
+  const centerOnCurrentLocation = () => {
+    if (userLocation && mapRef.current) {
+      mapRef.current.animateToRegion(userLocation, 1000);
+    }
+  };
+
+  if (loading) {
     return (
-      <View style={styles.centerContainer}>
+      <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#0F172A" />
-        <Text style={styles.loadingText}>Finding mechanics within {currentRadius}km...</Text>
+        <Text style={styles.loadingText}>Loading map...</Text>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      {userLocation && (
-        <MapView
-          ref={mapRef}
-          style={styles.map}
-          provider={PROVIDER_GOOGLE}
-          initialRegion={{
-            latitude: userLocation.latitude,
-            longitude: userLocation.longitude,
-            latitudeDelta: 0.05,
-            longitudeDelta: 0.05,
-          }}
-          showsUserLocation={true}
-          showsMyLocationButton={false}
-          showsCompass={true}
-          showsScale={true}
-    
-        >
-          {/* User Location Marker */}
-          <Marker coordinate={userLocation} pinColor="#3B82F6">
-            <Callout>
-              <View style={styles.calloutContainer}>
-                <Text style={styles.calloutTitle}>You are here</Text>
-              </View>
-            </Callout>
+      <MapView
+        ref={mapRef}
+        style={styles.map}
+        provider={PROVIDER_GOOGLE}
+        showsUserLocation={true}
+        showsMyLocationButton={false}
+        showsCompass={true}
+        showsTraffic={false}
+        zoomEnabled={true}
+        zoomControlEnabled={true}
+      >
+        {/* User Location Marker */}
+        {userLocation && (
+          <Marker
+            coordinate={{
+              latitude: userLocation.latitude,
+              longitude: userLocation.longitude,
+            }}
+            title="Your Location"
+          >
+            <View style={styles.userMarker}>
+              <Ionicons name="person" size={20} color="#FFF" />
+            </View>
           </Marker>
+        )}
 
-          {/* Mechanics Markers */}
-          {mechanics.map((mechanic) => {
-            const distance = mechanic.current_lat && mechanic.current_lng 
-              ? getDistance(mechanic.current_lat, mechanic.current_lng) 
-              : null;
-              
-            return (
-              <Marker
-                key={mechanic.id}
-                coordinate={{
-                  latitude: mechanic.current_lat!,
-                  longitude: mechanic.current_lng!,
-                }}
-                pinColor={mechanic.is_online ? "#10B981" : "#EF4444"}
-                onPress={() => handleMechanicPress(mechanic)}
-              >
-                <Callout>
-                  <View style={styles.calloutContainer}>
-                    <Text style={styles.calloutTitle}>{mechanic.full_name}</Text>
-                    <Text style={styles.calloutStatus}>
-                      Status: {mechanic.is_online ? '🟢 Online' : '🔴 Offline'}
-                    </Text>
-                    {mechanic.vehicle_type && (
-                      <Text style={styles.calloutInfo}>
-                        Vehicle: {mechanic.vehicle_type}
-                      </Text>
-                    )}
-                    {distance && (
-                      <Text style={styles.calloutInfo}>
-                        Distance: {distance}
-                      </Text>
-                    )}
-                    <TouchableOpacity
-                      style={styles.calloutButton}
-                      onPress={() => {
-                        if (onMechanicSelect) {
-                          onMechanicSelect(mechanic);
-                        }
-                      }}
-                    >
-                      <Text style={styles.calloutButtonText}>View Details</Text>
-                    </TouchableOpacity>
-                  </View>
-                </Callout>
-              </Marker>
-            );
-          })}
-        </MapView>
-      )}
+        {/* Customer Location (for tracking mode) */}
+        {customerLocation && isTracking && (
+          <Marker
+            coordinate={{
+              latitude: customerLocation.latitude,
+              longitude: customerLocation.longitude,
+            }}
+            title="Customer Location"
+          >
+            <View style={styles.customerMarker}>
+              <Ionicons name="home" size={20} color="#FFF" />
+            </View>
+          </Marker>
+        )}
 
-      {/* Radius Selector */}
-      <View style={styles.radiusContainer}>
-        <Text style={styles.radiusLabel}>Radius:</Text>
-        <TouchableOpacity
-          style={[styles.radiusButton, currentRadius === 5 && styles.radiusButtonActive]}
-          onPress={() => changeRadius(5)}
-        >
-          <Text style={[styles.radiusButtonText, currentRadius === 5 && styles.radiusButtonTextActive]}>
-            5km
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.radiusButton, currentRadius === 10 && styles.radiusButtonActive]}
-          onPress={() => changeRadius(10)}
-        >
-          <Text style={[styles.radiusButtonText, currentRadius === 10 && styles.radiusButtonTextActive]}>
-            10km
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.radiusButton, currentRadius === 20 && styles.radiusButtonActive]}
-          onPress={() => changeRadius(20)}
-        >
-          <Text style={[styles.radiusButtonText, currentRadius === 20 && styles.radiusButtonTextActive]}>
-            20km
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.radiusButton, currentRadius === 50 && styles.radiusButtonActive]}
-          onPress={() => changeRadius(50)}
-        >
-          <Text style={[styles.radiusButtonText, currentRadius === 50 && styles.radiusButtonTextActive]}>
-            50km
-          </Text>
-        </TouchableOpacity>
-      </View>
+        {/* Mechanic Location (for tracking mode) */}
+        {mechanicLocation && isTracking && (
+          <Marker
+            coordinate={{
+              latitude: mechanicLocation.latitude,
+              longitude: mechanicLocation.longitude,
+            }}
+            title="Mechanic Location"
+            anchor={{ x: 0.5, y: 0.5 }}
+          >
+            <View style={styles.mechanicMarker}>
+              <Ionicons name="construct" size={20} color="#FFF" />
+            </View>
+          </Marker>
+        )}
 
-      {/* Center on User Button */}
-      <TouchableOpacity style={styles.centerButton} onPress={centerOnUser}>
-        <Text style={styles.centerButtonText}>📍</Text>
+        {/* Nearby Mechanics Markers */}
+        {showNearbyMechanics && !isTracking && nearbyMechanics.map((mechanic:any) => (
+          <Marker
+            key={mechanic.id}
+            coordinate={{
+              latitude: mechanic.current_lat,
+              longitude: mechanic.current_lng,
+            }}
+            title={mechanic.full_name}
+            description={`${mechanic.distance_km?.toFixed(1)} km away`}
+            onPress={() => {
+              setSelectedMechanic(mechanic);
+              if (onMechanicSelect) {
+                onMechanicSelect(mechanic);
+              }
+            }}
+          >
+            <View style={[
+              styles.mechanicMarker,
+              selectedMechanic?.id === mechanic.id && styles.selectedMarker
+            ]}>
+              <Ionicons name="construct" size={16} color="#FFF" />
+            </View>
+          </Marker>
+        ))}
+
+        {/* Route Polyline */}
+        {routeCoordinates.length > 0 && (
+          <Polyline
+            coordinates={routeCoordinates}
+            strokeColor="#10B981"
+            strokeWidth={4}
+            lineDashPattern={[0]}
+          />
+        )}
+      </MapView>
+
+      {/* Controls */}
+      <TouchableOpacity
+        style={styles.locationButton}
+        onPress={centerOnCurrentLocation}
+      >
+        <Ionicons name="locate" size={24} color="#0F172A" />
       </TouchableOpacity>
 
-      {/* Mechanics Count */}
-      <View style={styles.countContainer}>
-        <Text style={styles.countText}>
-          {mechanics.length} Mechanic{mechanics.length !== 1 ? 's' : ''} Nearby
-        </Text>
-      </View>
-
-      {/* Selected Mechanic Info */}
-      {selectedMechanic && (
-        <View style={styles.selectedCard}>
-          <View style={styles.selectedCardContent}>
-            <View>
-              <Text style={styles.selectedName}>{selectedMechanic.full_name}</Text>
-              <Text style={styles.selectedStatus}>
-                {selectedMechanic.is_online ? '🟢 Available' : '🔴 Offline'}
-              </Text>
-              {selectedMechanic.vehicle_type && (
-                <Text style={styles.selectedInfo}>
-                  Vehicle: {selectedMechanic.vehicle_type}
-                </Text>
-              )}
-              {selectedMechanic.current_lat && selectedMechanic.current_lng && (
-                <Text style={styles.selectedInfo}>
-                  Distance: {getDistance(selectedMechanic.current_lat, selectedMechanic.current_lng)}
-                </Text>
-              )}
-            </View>
-            <TouchableOpacity
-              style={styles.selectButton}
-              onPress={() => {
-                router.push({
-                  pathname: '/(tabs)/customer',
-                  params: { mechanicId: selectedMechanic.id },
-                });
-              }}
-            >
-              <Text style={styles.selectButtonText}>Select</Text>
-            </TouchableOpacity>
+      {isTracking && (
+        <View style={styles.trackingInfo}>
+          <View style={styles.trackingCard}>
+            <Ionicons name="car" size={20} color="#10B981" />
+            <Text style={styles.trackingText}>
+              {routeCoordinates.length > 0 ? 'Mechanic en route' : 'Waiting for location update'}
+            </Text>
           </View>
-          <TouchableOpacity
-            style={styles.closeButton}
-            onPress={() => setSelectedMechanic(null)}
-          >
-            <Text style={styles.closeButtonText}>✕</Text>
-          </TouchableOpacity>
         </View>
       )}
     </View>
   );
-}
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -343,10 +282,9 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   map: {
-    width: width,
-    height: height,
+    flex: 1,
   },
-  centerContainer: {
+  loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
@@ -357,166 +295,98 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#64748B',
   },
-  radiusContainer: {
-    position: 'absolute',
-    top: 60,
-    right: 20,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 12,
-    padding: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-    zIndex: 1,
-  },
-  radiusLabel: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#64748B',
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  radiusButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    marginVertical: 2,
-    backgroundColor: '#F1F5F9',
-  },
-  radiusButtonActive: {
-    backgroundColor: '#0F172A',
-  },
-  radiusButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B',
-    textAlign: 'center',
-  },
-  radiusButtonTextActive: {
-    color: '#FFF',
-  },
-  centerButton: {
-    position: 'absolute',
-    bottom: 120,
-    right: 20,
-    backgroundColor: '#FFFFFF',
-    padding: 12,
-    borderRadius: 30,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-    zIndex: 1,
-  },
-  centerButtonText: {
-    fontSize: 24,
-  },
-  countContainer: {
-    position: 'absolute',
-    top: 60,
-    left: 20,
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+  userMarker: {
+    backgroundColor: '#3B82F6',
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    zIndex: 1,
-  },
-  countText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  calloutContainer: {
-    padding: 8,
-    minWidth: 150,
-  },
-  calloutTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0F172A',
-    marginBottom: 4,
-  },
-  calloutStatus: {
-    fontSize: 12,
-    color: '#64748B',
-    marginBottom: 4,
-  },
-  calloutInfo: {
-    fontSize: 12,
-    color: '#64748B',
-    marginBottom: 4,
-  },
-  calloutButton: {
-    backgroundColor: '#0F172A',
-    padding: 6,
-    borderRadius: 8,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 4,
+    borderWidth: 3,
+    borderColor: '#FFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
   },
-  calloutButtonText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '600',
+  mechanicMarker: {
+    backgroundColor: '#0F172A',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
   },
-  selectedCard: {
+  customerMarker: {
+    backgroundColor: '#F59E0B',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#FFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  selectedMarker: {
+    backgroundColor: '#10B981',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+  },
+  locationButton: {
     position: 'absolute',
     bottom: 20,
-    left: 20,
     right: 20,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
-    flexDirection: 'row',
+    backgroundColor: '#FFF',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    justifyContent: 'center',
     alignItems: 'center',
-    justifyContent: 'space-between',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 5,
-    zIndex: 1,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  selectedCardContent: {
-    flex: 1,
+  trackingInfo: {
+    position: 'absolute',
+    top: 20,
+    left: 20,
+    right: 20,
+  },
+  trackingCard: {
+    backgroundColor: '#FFF',
+    padding: 12,
+    borderRadius: 12,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginRight: 12,
+    justifyContent: 'center',
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  selectedName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#0F172A',
-    marginBottom: 4,
-  },
-  selectedStatus: {
-    fontSize: 12,
-    color: '#64748B',
-    marginBottom: 2,
-  },
-  selectedInfo: {
-    fontSize: 12,
-    color: '#94A3B8',
-  },
-  selectButton: {
-    backgroundColor: '#0F172A',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  selectButtonText: {
-    color: '#FFF',
+  trackingText: {
     fontSize: 14,
     fontWeight: '600',
-  },
-  closeButton: {
-    padding: 4,
-  },
-  closeButtonText: {
-    fontSize: 18,
-    color: '#64748B',
+    color: '#0F172A',
   },
 });

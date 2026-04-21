@@ -19,10 +19,10 @@ export default function TabsLayout() {
         }}
       />
        <Tabs.Screen
-        name="explore"
+        name="profile"
         options={{
-          title: 'Explore',
-          tabBarIcon: ({ color, size }) => <Ionicons name="compass-outline" color={color} size={size} />
+          title: 'profile',
+          tabBarIcon: ({ color, size }) => <Ionicons name="happy" color={color} size={size} />
         }}
       />
     </Tabs>

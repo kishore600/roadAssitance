@@ -537,3 +537,281 @@ export async function cleanupExpiredBookings() {
   
   console.log(`✅ Cleaned up ${expiredBookings?.length || 0} expired bookings`);
 }
+
+// In your booking.service.ts
+
+// Modified verifyOTPAndComplete - now only verifies OTP and marks as completed
+export async function verifyOTPAndComplete(bookingId: string, otp: string) {
+    // First, get the booking to verify OTP
+    const { data: booking, error: fetchError } = await supabaseAdmin
+        .from('bookings')
+        .select('*')
+        .eq('id', bookingId)
+        .single();
+
+    if (fetchError) throw fetchError;
+    
+    if (!booking) {
+        throw new Error('Booking not found');
+    }
+    
+    if (booking.status !== 'arrived') {
+        throw new Error('Mechanic must arrive before completing service');
+    }
+    
+    if (!booking.completion_otp || !booking.otp_expires_at) {
+        throw new Error('No OTP generated for this booking');
+    }
+    
+    // Check if OTP is expired
+    if (new Date(booking.otp_expires_at) < new Date()) {
+        throw new Error('OTP has expired. Please ask mechanic to generate a new OTP');
+    }
+    
+    // Verify OTP
+    if (booking.completion_otp !== otp) {
+        throw new Error('Invalid OTP. Please try again');
+    }
+    
+    // Update booking to completed without rating
+    const { data, error } = await supabaseAdmin
+        .from('bookings')
+        .update({
+            status: 'completed',
+            completed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+        })
+        .eq('id', bookingId)
+        .select(`
+            *,
+            customer:profiles!bookings_customer_id_fkey(
+                full_name, 
+                email,
+                phone
+            ),
+            mechanic:profiles!bookings_mechanic_id_fkey(
+                full_name, 
+                email,
+                phone
+            ),
+            service:services(
+                id,
+                name,
+                base_price
+            )
+        `)
+        .single();
+    
+    if (error) throw error;
+    
+    // Clear OTP fields
+    await supabaseAdmin
+        .from('bookings')
+        .update({
+            completion_otp: null,
+            otp_expires_at: null
+        })
+        .eq('id', bookingId);
+    
+    emitBookingUpdate(bookingId, data);
+    return data;
+}
+
+// New function to add customer rating after completion
+export async function addCustomerRating(bookingId: string, rating: number, review?: string) {
+    if (rating < 1 || rating > 5) {
+        throw new Error('Rating must be between 1 and 5');
+    }
+    
+    const { data: booking, error: fetchError } = await supabaseAdmin
+        .from('bookings')
+        .select('*, customer_id, mechanic_id')
+        .eq('id', bookingId)
+        .single();
+    
+    if (fetchError) throw fetchError;
+    
+    if (booking.status !== 'completed') {
+        throw new Error('Can only rate completed bookings');
+    }
+    
+    if (booking.customer_rating) {
+        throw new Error('Rating already submitted for this booking');
+    }
+    
+    const { data, error } = await supabaseAdmin
+        .from('bookings')
+        .update({
+            customer_rating: rating,
+            customer_review: review || null,
+            updated_at: new Date().toISOString()
+        })
+        .eq('id', bookingId)
+        .select(`
+            *,
+            customer:profiles!bookings_customer_id_fkey(
+                full_name, 
+                email,
+                phone
+            ),
+            mechanic:profiles!bookings_mechanic_id_fkey(
+                full_name, 
+                email,
+                phone
+            ),
+            service:services(
+                id,
+                name,
+                base_price
+            )
+        `)
+        .single();
+    
+    if (error) throw error;
+    
+    // Create review in reviews table
+    await supabaseAdmin
+        .from('reviews')
+        .insert({
+            booking_id: bookingId,
+            reviewer_id: booking.customer_id,
+            reviewee_id: booking.mechanic_id,
+            rating: rating,
+            review: review || null,
+            reviewer_role: 'customer'
+        });
+    
+    emitBookingUpdate(bookingId, data);
+    return data;
+}
+
+// Generate OTP for job completion
+export async function generateCompletionOTP(bookingId: string): Promise<string> {
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+
+    const { data, error } = await supabaseAdmin
+        .from('bookings')
+        .update({
+            completion_otp: otp,
+            otp_expires_at: expiresAt.toISOString(),
+            updated_at: new Date().toISOString()
+        })
+        .eq('id', bookingId)
+        .eq('status', 'arrived') // Only if mechanic has arrived
+        .select()
+        .single();
+
+    if (error) throw error;
+    
+    console.log(`OTP generated for booking ${bookingId}: ${otp}`);
+    return otp;
+}
+  
+
+// Mechanic submits rating for customer
+export async function addMechanicRating(bookingId: string, rating: number, review?: string) {
+    if (rating < 1 || rating > 5) {
+        throw new Error('Rating must be between 1 and 5');
+    }
+    
+    const { data: booking, error: fetchError } = await supabaseAdmin
+        .from('bookings')
+        .select('status, mechanic_id')
+        .eq('id', bookingId)
+        .single();
+    
+    if (fetchError) throw fetchError;
+    
+    if (booking.status !== 'completed') {
+        throw new Error('Can only rate completed bookings');
+    }
+    
+    const { data, error } = await supabaseAdmin
+        .from('bookings')
+        .update({
+            mechanic_rating: rating,
+            mechanic_review: review || null,
+            updated_at: new Date().toISOString()
+        })
+        .eq('id', bookingId)
+        .select()
+        .single();
+    
+    if (error) throw error;
+    
+    // Create review in reviews table
+    await supabaseAdmin
+        .from('reviews')
+        .insert({
+            booking_id: bookingId,
+            reviewer_id: booking.mechanic_id,
+            reviewee_id: data.customer_id,
+            rating: rating,
+            review: review || null,
+            reviewer_role: 'mechanic'
+        });
+    
+    emitBookingUpdate(bookingId, data);
+    return data;
+}
+
+// Get booking details with ratings
+export async function getBookingWithRatings(bookingId: string) {
+    const { data, error } = await supabaseAdmin
+        .from('bookings')
+        .select(`
+            *,
+            customer:profiles!bookings_customer_id_fkey(
+                id,
+                full_name, 
+                email,
+                phone
+            ),
+            mechanic:profiles!bookings_mechanic_id_fkey(
+                id,
+                full_name, 
+                email,
+                phone
+            ),
+            service:services(
+                id,
+                name,
+                base_price
+            ),
+            customer_review_entry:reviews!reviews_booking_id_fkey(
+                rating,
+                review,
+                created_at
+            )
+        `)
+        .eq('id', bookingId)
+        .single();
+    
+    if (error) throw error;
+    return data;
+}
+
+// Get mechanic's average rating
+export async function getMechanicRating(mechanicId: string) {
+    const { data, error } = await supabaseAdmin
+        .from('bookings')
+        .select('customer_rating')
+        .eq('mechanic_id', mechanicId)
+        .not('customer_rating', 'is', null);
+    
+    if (error) throw error;
+    
+    if (!data || data.length === 0) {
+        return { average_rating: 0, total_reviews: 0 };
+    }
+    
+    const totalRating = data.reduce((sum, booking) => sum + (booking.customer_rating || 0), 0);
+    const averageRating = totalRating / data.length;
+    
+    return {
+        average_rating: parseFloat(averageRating.toFixed(1)),
+        total_reviews: data.length
+    };
+}

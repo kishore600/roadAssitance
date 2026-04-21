@@ -11,7 +11,10 @@ export interface SavedLocation {
 }
 
 export interface Booking {
+    customer:any
     id: string;
+    customer_rating:any
+    mechanic_rating:any
     customer_id: string;
     mechanic_id: string | null;
     service_id: string;

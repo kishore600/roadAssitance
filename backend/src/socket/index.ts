@@ -1,4 +1,4 @@
-// server/socket.js
+// server/socket.js - Fixed version
 import { Server } from 'socket.io';
 
 let io:any;
@@ -33,7 +33,12 @@ export function initSocket(server:any) {
       if (bookingId) {
         // Emit to customer who requested this booking
         io.to(`booking:${bookingId}`).emit('booking:accepted', {
-          booking: { id: bookingId, status: 'accepted', eta_minutes: eta || 15 },
+          booking: { 
+            id: bookingId, 
+            status: 'accepted', 
+            eta_minutes: eta || 15,
+            mechanic: mechanic
+          },
           mechanic: mechanic
         });
         
@@ -49,29 +54,63 @@ export function initSocket(server:any) {
 
     // Handle status updates
     socket.on('booking:status:update', (data:any) => {
-      const { bookingId, status, timestamp } = data;
+      const { bookingId, status, timestamp, mechanicLocation } = data;
       console.log(`Booking status update: ${bookingId} -> ${status}`);
       
       if (bookingId) {
         io.to(`booking:${bookingId}`).emit('booking:status:updated', {
           id: bookingId,
           status: status,
-          updated_at: timestamp || new Date().toISOString()
+          updated_at: timestamp || new Date().toISOString(),
+          ...(mechanicLocation && { mechanic_location: mechanicLocation })
         });
       }
     });
 
-    // Handle real-time location updates
-    socket.on('mechanic:location', (data:any) => {
-      const { bookingId, location, eta } = data;
+    // Handle real-time location updates from mechanic
+    socket.on('mechanic:location:update', (data:any) => {
+      const { bookingId, location, eta, mechanicId } = data;
+      
+      console.log(`Received mechanic location update - Booking: ${bookingId}, Location:`, location);
       
       if (bookingId && location) {
-        io.to(`booking:${bookingId}`).emit('mechanic:location:update', {
+        // Ensure location has the correct format
+        const locationData = {
           bookingId: bookingId,
-          location: location,
-          eta: eta,
-          timestamp: new Date().toISOString()
-        });
+          location: {
+            lat: location.lat || location.latitude,
+            lng: location.lng || location.longitude
+          },
+          eta: eta || 0,
+          timestamp: new Date().toISOString(),
+          mechanicId: mechanicId
+        };
+        
+        // Emit to the specific booking room
+        io.to(`booking:${bookingId}`).emit('mechanic:location:update', locationData);
+        console.log(`Emitted location update to booking:${bookingId}`);
+      }
+    });
+
+    // Alternative event name that mechanics might be using
+    socket.on('mechanic:location', (data:any) => {
+      console.log('Received mechanic:location event:', data);
+      
+      const { bookingId, location, eta, mechanicId } = data;
+      
+      if (bookingId && location) {
+        const locationData = {
+          bookingId: bookingId,
+          location: {
+            lat: location.lat || location.latitude,
+            lng: location.lng || location.longitude
+          },
+          eta: eta || 0,
+          timestamp: new Date().toISOString(),
+          mechanicId: mechanicId
+        };
+        
+        io.to(`booking:${bookingId}`).emit('mechanic:location:update', locationData);
       }
     });
 

@@ -1,0 +1,62 @@
+table_name,column_name,data_type
+bookings,id,uuid
+bookings,customer_id,uuid
+bookings,mechanic_id,uuid
+bookings,service_id,uuid
+bookings,issue_note,text
+bookings,status,text
+bookings,customer_lat,double precision
+bookings,customer_lng,double precision
+bookings,customer_address,text
+bookings,eta_minutes,integer
+bookings,amount,numeric
+bookings,created_at,timestamp with time zone
+bookings,updated_at,timestamp with time zone
+bookings,expires_at,timestamp without time zone
+bookings,cancellation_reason,text
+geography_columns,f_table_catalog,name
+geography_columns,f_table_schema,name
+geography_columns,f_table_name,name
+geography_columns,f_geography_column,name
+geography_columns,coord_dimension,integer
+geography_columns,srid,integer
+geography_columns,type,text
+geometry_columns,f_table_catalog,character varying
+geometry_columns,f_table_schema,name
+geometry_columns,f_table_name,name
+geometry_columns,f_geometry_column,name
+geometry_columns,coord_dimension,integer
+geometry_columns,srid,integer
+geometry_columns,type,character varying
+mechanic_status,profile_id,uuid
+mechanic_status,is_online,boolean
+mechanic_status,vehicle_type,text
+mechanic_status,current_lat,double precision
+mechanic_status,current_lng,double precision
+mechanic_status,updated_at,timestamp with time zone
+profiles,id,uuid
+profiles,role,text
+profiles,full_name,text
+profiles,phone,text
+profiles,avatar_url,text
+profiles,created_at,timestamp with time zone
+profiles,email,text
+profiles,password,text
+saved_locations,id,uuid
+saved_locations,customer_id,uuid
+saved_locations,name,text
+saved_locations,address,text
+saved_locations,latitude,double precision
+saved_locations,longitude,double precision
+saved_locations,is_default,boolean
+saved_locations,created_at,timestamp with time zone
+saved_locations,updated_at,timestamp with time zone
+services,id,uuid
+services,name,text
+services,base_price,numeric
+services,created_at,timestamp with time zone
+spatial_ref_sys,srid,integer
+spatial_ref_sys,auth_name,character varying
+spatial_ref_sys,auth_srid,integer
+spatial_ref_sys,srtext,character varying
+spatial_ref_sys,proj4text,character varying

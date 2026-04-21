@@ -1,6 +1,6 @@
-import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import { AuthProvider } from '@/context/AuthContext';
+import { Stack } from "expo-router";
+import { StatusBar } from "expo-status-bar";
+import { AuthProvider } from "@/context/AuthContext";
 
 export default function RootLayout() {
   return (
@@ -10,7 +10,17 @@ export default function RootLayout() {
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="mechanic" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', headerShown: false }} />
+        <Stack.Screen
+          name="customer/complete-service"
+          options={{
+            title: "Complete Service",
+            headerBackTitle: "Back",
+          }}
+        />
+        <Stack.Screen
+          name="modal"
+          options={{ presentation: "modal", headerShown: false }}
+        />
       </Stack>
     </AuthProvider>
   );
