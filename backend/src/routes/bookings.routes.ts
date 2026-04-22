@@ -16,6 +16,7 @@ import {
   addMechanicRating,
   getMechanicRating,
   addCustomerRating,
+  getMechanicTodayEarnings,
 } from "../services/booking.service";
 
 export const bookingsRouter = Router();
@@ -270,4 +271,25 @@ bookingsRouter.get("/mechanic/:mechanicId/rating", async (req, res) => {
     console.error("Error fetching rating:", err);
     res.status(500).json({ error: err.message });
   }
+});
+
+bookingsRouter.get("/mechanic/:mechanicId/earnings", async (req, res) => {
+    try {
+        const { mechanicId } = req.params;
+        const { date } = req.query;
+        
+        let earnings;
+        // if (date) {
+        //     // Get earnings for specific date
+        //     earnings = await getMechanicEarningsByDate(mechanicId, date as string);
+        // } else {
+        //     // Get today's earnings
+            earnings = await getMechanicTodayEarnings(mechanicId);
+        // }
+        
+        res.json(earnings);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to fetch earnings' });
+    }
 });

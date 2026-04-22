@@ -1,4 +1,4 @@
-// app/customer/index.tsx - Fixed version with proper tracking
+// app/customer/index.tsx - PRODUCTION FIXED VERSION
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
@@ -15,6 +15,8 @@ import {
   Modal,
   ScrollView,
   Dimensions,
+  AppState,
+  AppStateStatus,
 } from "react-native";
 import * as Location from "expo-location";
 import MapView, { Marker, Callout, PROVIDER_GOOGLE } from "react-native-maps";
@@ -22,17 +24,21 @@ import MapViewDirections from "react-native-maps-directions";
 import { ServiceCard } from "@/components/ServiceCard";
 import { api } from "@/lib/api";
 import { Booking, Mechanic, ServiceItem, SavedLocation } from "@/types";
-import { socket } from "@/lib/socket";
+import { socket, socketService } from "@/lib/socket";
 import { useAuth } from "@/context/AuthContext";
 import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LocationPicker } from "@/components/LocationPicker";
 
 const { width, height } = Dimensions.get("window");
-const GOOGLE_MAPS_API_KEY = process.env
-  .EXPO_PUBLIC_GOOGLE_MAPS_API_KEY as string;
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY as string;
 
-// Distance calculation function
+// Validate API key exists
+if (!GOOGLE_MAPS_API_KEY) {
+  console.error("❌ GOOGLE_MAPS_API_KEY is missing! Check your .env file");
+}
+
+// Distance calculation function (fallback)
 function calculateDistance(
   lat1: number,
   lon1: number,
@@ -52,6 +58,29 @@ function calculateDistance(
   return R * c;
 }
 
+// Helper to format mechanic location from various possible formats
+function getMechanicLatLng(booking: any): { latitude: number; longitude: number } | null {
+  if (!booking) return null;
+  
+  // Check multiple possible locations
+  const location = booking.mechanic_location || booking.mechanic?.current_location;
+  
+  if (!location) return null;
+  
+  // Handle different formats
+  if (typeof location.lat === 'number' && typeof location.lng === 'number') {
+    return { latitude: location.lat, longitude: location.lng };
+  }
+  if (typeof location.latitude === 'number' && typeof location.longitude === 'number') {
+    return { latitude: location.latitude, longitude: location.longitude };
+  }
+  if (typeof location.coordinates?.lat === 'number') {
+    return { latitude: location.coordinates.lat, longitude: location.coordinates.lng };
+  }
+  
+  return null;
+}
+
 export default function CustomerScreen() {
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [nearbyMechanics, setNearbyMechanics] = useState<Mechanic[]>([]);
@@ -66,14 +95,10 @@ export default function CustomerScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [creatingBooking, setCreatingBooking] = useState(false);
   const [waitingForMechanic, setWaitingForMechanic] = useState(false);
-  const [selectedService, setSelectedService] = useState<ServiceItem | null>(
-    null,
-  );
+  const [selectedService, setSelectedService] = useState<ServiceItem | null>(null);
   const { user, logout } = useAuth();
   const [timeRemaining, setTimeRemaining] = useState<number>(120);
-  const [timerInterval, setTimerInterval] = useState<NodeJS.Timeout | null>(
-    null,
-  );
+  const [timerInterval, setTimerInterval] = useState<NodeJS.Timeout | null>(null);
 
   // OTP and Rating States
   const [showOTPModal, setShowOTPModal] = useState(false);
@@ -82,9 +107,7 @@ export default function CustomerScreen() {
   const [customerRating, setCustomerRating] = useState(0);
   const [customerReview, setCustomerReview] = useState("");
   const [completingService, setCompletingService] = useState(false);
-  const [completedBookingId, setCompletedBookingId] = useState<string | null>(
-    null,
-  );
+  const [completedBookingId, setCompletedBookingId] = useState<string | null>(null);
 
   // Location picker states
   const [showLocationPicker, setShowLocationPicker] = useState(false);
@@ -104,13 +127,17 @@ export default function CustomerScreen() {
   const [routeInfo, setRouteInfo] = useState<{
     distance: number;
     duration: number;
+    distanceText: string;
+    durationText: string;
   } | null>(null);
   const [isTracking, setIsTracking] = useState(false);
-  const [currentTrackingModal, setCurrentTrackingModal] = useState<
-    "waiting" | "tracking" | null
-  >(null);
+  const [currentTrackingModal, setCurrentTrackingModal] = useState<"waiting" | "tracking" | null>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const [mechanicName, setMechanicName] = useState<string>("");
+  
   const mapRef = useRef<MapView>(null);
   const locationUpdateInterval = useRef<any>(null);
+  const routeRetryCount = useRef(0);
 
   // Check for active booking on focus
   useFocusEffect(
@@ -118,10 +145,81 @@ export default function CustomerScreen() {
       if (user) {
         checkActiveBooking();
       }
-    }, [user]),
+    }, [user])
   );
 
-  const sendLocationUpdate = async (bookingId: string, eta: number) => {
+// Replace socket with socketService
+// Instead of: import { socket } from "@/lib/socket";
+// Use: const socket = socketService;
+
+// Update your useEffects:
+
+useEffect(() => {
+  // Listen for service completion events
+  socket.on("service:completed", (data: { bookingId: string }) => {
+    if (data.bookingId === activeBooking?.id) {
+      Alert.alert(
+        "✅ Service Completed!",
+        "Your service has been completed. Please rate your experience.",
+        [
+          {
+            text: "Rate Now",
+            onPress: () => {
+              setCompletedBookingId(activeBooking.id);
+              setShowRatingModal(true);
+              setActiveBooking(null);
+              setIsTracking(false);
+              setCurrentTrackingModal(null);
+            }
+          }
+        ]
+      );
+    }
+  });
+  
+  return () => {
+    socket.off("service:completed");
+  };
+}, [activeBooking]);
+
+
+// When joining a booking room
+socketService.joinBookingRoom(activeBooking?.id);
+
+// When requesting mechanic location
+socketService.requestMechanicLocation(activeBooking?.id);
+  // Monitor app state to refresh location when app comes to foreground
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextAppState: AppStateStatus) => {
+      if (nextAppState === "active" && activeBooking) {
+        // Refresh location when app comes to foreground
+        fetchCurrentLocation();
+        if (activeBooking.mechanic_id) {
+          requestMechanicLocationUpdate();
+        }
+      }
+    });
+    return () => subscription.remove();
+  }, [activeBooking]);
+
+  const fetchCurrentLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") return;
+      
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+      setCoords({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      });
+    } catch (error) {
+      console.error("Failed to get location:", error);
+    }
+  };
+// Updated sendLocationUpdate function using socketService
+const sendLocationUpdate = async (bookingId: string, eta: number) => {
     try {
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
@@ -139,21 +237,33 @@ export default function CustomerScreen() {
       };
 
       console.log("Sending location update:", locationData);
-      socket.emit("mechanic:location:update", locationData);
-      // Also emit to alternative event name for redundancy
-      socket.emit("mechanic:location", locationData);
+      
+      // Use socketService methods instead of direct emit
+      socketService.sendMechanicLocation(
+        bookingId, 
+        { lat: location.coords.latitude, lng: location.coords.longitude }, 
+        eta, 
+        user?.id
+      );
+      
     } catch (error) {
       console.error("Failed to get location:", error);
     }
-  };
+};
+
+const requestMechanicLocationUpdate = () => {
+    if (activeBooking?.id) {
+      // Use socketService method
+      socketService.requestMechanicLocation(activeBooking.id);
+    }
+};
 
   // Start periodic location updates
   useEffect(() => {
     if (activeBooking && activeBooking.status === "accepted") {
       const interval = setInterval(() => {
         sendLocationUpdate(activeBooking.id, 10);
-      }, 3000); // Update every 3 seconds
-
+      }, 3000);
       return () => clearInterval(interval);
     }
   }, [activeBooking]);
@@ -165,18 +275,12 @@ export default function CustomerScreen() {
       location: { lat: number; lng: number };
       eta: number;
       timestamp?: string;
+      mechanic?: { full_name: string };
     }) => {
       console.log("🔴 Mechanic location update received:", data);
 
       if (data.bookingId === activeBooking?.id) {
-        console.log("✅ Location update matches active booking");
-
-        // Validate location data
-        if (
-          !data.location ||
-          typeof data.location.lat !== "number" ||
-          typeof data.location.lng !== "number"
-        ) {
+        if (!data.location || typeof data.location.lat !== "number" || typeof data.location.lng !== "number") {
           console.error("❌ Invalid location data received:", data.location);
           return;
         }
@@ -188,6 +292,11 @@ export default function CustomerScreen() {
 
         console.log("📍 Updating mechanic location to:", newLocation);
         setMechanicLocation(newLocation);
+        
+        // Update mechanic name if provided
+        if (data.mechanic?.full_name) {
+          setMechanicName(data.mechanic.full_name);
+        }
 
         setActiveBooking((prev: any) =>
           prev
@@ -195,35 +304,32 @@ export default function CustomerScreen() {
                 ...prev,
                 mechanic_location: data.location,
                 eta_minutes: data.eta,
+                mechanic: prev.mechanic || { full_name: data.mechanic?.full_name || prev.mechanic?.full_name },
               }
-            : null,
+            : null
         );
 
-        // Ensure tracking map is shown
         if (currentTrackingModal !== "tracking") {
           console.log("🔄 Showing tracking modal");
           setCurrentTrackingModal("tracking");
         }
         setIsTracking(true);
+        setRouteError(null); // Reset route error on new location
+        routeRetryCount.current = 0; // Reset retry count
 
-        // Auto-fit map bounds when location updates
+        // Auto-fit map bounds
         if (mapRef.current && coords && newLocation) {
-          console.log("🗺️ Auto-fitting map to show both locations");
-          mapRef.current.fitToCoordinates([coords, newLocation], {
-            edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-            animated: true,
-          });
+          setTimeout(() => {
+            mapRef.current?.fitToCoordinates([coords, newLocation], {
+              edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+              animated: true,
+            });
+          }, 500);
         }
-      } else {
-        console.log(
-          `⚠️ Location update for booking ${data.bookingId} but active booking is ${activeBooking?.id}`,
-        );
       }
     };
 
     socket.on("mechanic:location:update", handleMechanicLocationUpdate);
-
-    // Also listen for alternative event name
     socket.on("mechanic:location:updated", handleMechanicLocationUpdate);
 
     return () => {
@@ -231,40 +337,44 @@ export default function CustomerScreen() {
       socket.off("mechanic:location:updated", handleMechanicLocationUpdate);
     };
   }, [activeBooking?.id, coords, currentTrackingModal]);
+
   useEffect(() => {
     if (user && !activeBooking) {
       initializeApp();
     }
 
     // Listen for booking accepted event
-    socket.on(
-      "booking:accepted",
-      (data: { booking: Booking; mechanic: Mechanic }) => {
-        console.log("Booking accepted!", data);
+    socket.on("booking:accepted", (data: { booking: Booking; mechanic: Mechanic }) => {
+      console.log("Booking accepted!", data);
 
-        if (data.booking.id === activeBooking?.id) {
-          setActiveBooking(data.booking);
-          setWaitingForMechanic(false);
-          setIsTracking(true);
-          setCurrentTrackingModal("tracking");
+      if (data.booking?.id === activeBooking?.id) {
+        setActiveBooking(data.booking);
+        setMechanicName(data.mechanic.full_name);
+        setWaitingForMechanic(false);
+        setIsTracking(true);
+        setCurrentTrackingModal("tracking");
 
-          Alert.alert(
-            "✓ Request Accepted!",
-            `${data.mechanic.full_name} has accepted your request. Tracking their location now.`,
-            [{ text: "OK" }],
-          );
+        Alert.alert(
+          "✓ Request Accepted!",
+          `${data.mechanic.full_name} has accepted your request. Tracking their location now.`,
+          [{ text: "OK" }]
+        );
 
-          startTrackingMechanic(data.booking);
-        }
-      },
-    );
+        startTrackingMechanic(data.booking);
+      }
+    });
 
     // Listen for status updates
     socket.on("booking:status:updated", (updatedBooking: Booking) => {
       console.log("Booking status updated:", updatedBooking);
 
-      if (updatedBooking.id === activeBooking?.id) {
+      if (updatedBooking?.id === activeBooking?.id) {
         setActiveBooking(updatedBooking);
+        
+        // Update mechanic name if available
+        if (updatedBooking.mechanic?.full_name) {
+          setMechanicName(updatedBooking.mechanic.full_name);
+        }
 
         if (updatedBooking.status === "on_the_way") {
           Alert.alert(
@@ -273,6 +383,7 @@ export default function CustomerScreen() {
           );
           setCurrentTrackingModal("tracking");
           setIsTracking(true);
+          requestMechanicLocationUpdate(); // Request immediate location
         } else if (updatedBooking.status === "arrived") {
           Alert.alert(
             "📍 Mechanic Arrived",
@@ -285,15 +396,12 @@ export default function CustomerScreen() {
             "✅ Service Completed",
             "Thank you for using our service! Please rate your experience.",
           );
-          setCompletedBookingId(updatedBooking.id);
+          setCompletedBookingId(updatedBooking?.id);
           setShowRatingModal(true);
           setIsTracking(false);
           setCurrentTrackingModal(null);
         } else if (updatedBooking.status === "cancelled") {
-          Alert.alert(
-            "❌ Request Cancelled",
-            "Your request has been cancelled.",
-          );
+          Alert.alert("❌ Request Cancelled", "Your request has been cancelled.");
           setActiveBooking(null);
           setWaitingForMechanic(false);
           setIsTracking(false);
@@ -303,52 +411,9 @@ export default function CustomerScreen() {
       }
     });
 
-    // Listen for mechanic location updates
-    socket.on(
-      "mechanic:location:update",
-      (data: {
-        bookingId: string;
-        location: { lat: number; lng: number };
-        eta: number;
-      }) => {
-        console.log("Mechanic location update:", data);
-
-        if (data.bookingId === activeBooking?.id) {
-          const newLocation = {
-            latitude: data.location.lat,
-            longitude: data.location.lng,
-          };
-          setMechanicLocation(newLocation);
-
-          setActiveBooking((prev: any) =>
-            prev
-              ? {
-                  ...prev,
-                  mechanic_location: data.location,
-                  eta_minutes: data.eta,
-                }
-              : null,
-          );
-
-          // Ensure tracking map is shown
-          setCurrentTrackingModal("tracking");
-          setIsTracking(true);
-
-          // Auto-fit map bounds when location updates
-          if (mapRef.current && coords && newLocation) {
-            mapRef.current.fitToCoordinates([coords, newLocation], {
-              edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-              animated: true,
-            });
-          }
-        }
-      },
-    );
-
     return () => {
       socket.off("booking:accepted");
       socket.off("booking:status:updated");
-      socket.off("mechanic:location:update");
       if (locationUpdateInterval.current) {
         clearInterval(locationUpdateInterval.current);
       }
@@ -397,15 +462,24 @@ export default function CustomerScreen() {
       if (active) {
         console.log("Active booking found:", active);
         setActiveBooking(active);
+        
+        // Set mechanic name if available
+        if (active.mechanic?.full_name) {
+          setMechanicName(active.mechanic.full_name);
+        }
 
-        if (
-          active.status === "accepted" ||
-          active.status === "on_the_way" ||
-          active.status === "arrived"
-        ) {
+        if (active.status === "accepted" || active.status === "on_the_way" || active.status === "arrived") {
           setIsTracking(true);
           setCurrentTrackingModal("tracking");
           startTrackingMechanic(active);
+          
+          // Request immediate location update
+          if (active.mechanic_id) {
+            setTimeout(() => {
+              requestMechanicLocationUpdate();
+            }, 1000);
+          }
+          
           if (active.status === "arrived") {
             setShowOTPModal(true);
           }
@@ -439,10 +513,7 @@ export default function CustomerScreen() {
   async function fetchLocationAndMechanics() {
     const permission = await Location.requestForegroundPermissionsAsync();
     if (permission.status !== "granted") {
-      Alert.alert(
-        "Permission required",
-        "Location is needed to find nearby mechanics.",
-      );
+      Alert.alert("Permission required", "Location is needed to find nearby mechanics.");
       return;
     }
 
@@ -490,7 +561,7 @@ export default function CustomerScreen() {
   async function loadBookings() {
     if (!user) return;
     try {
-      const { data } = await api.get(`/bookings/customer/${user.id}`);
+      const { data } = await api.get(`/bookings/customer/${user?.id}`);
       setBookings(data);
     } catch (error) {
       console.error("Failed to load bookings:", error);
@@ -547,22 +618,23 @@ export default function CustomerScreen() {
 
     try {
       const payload = {
-        customerId: user.id,
+        customerId: user?.id,
         mechanicId: null,
-        serviceId: service.id,
-        issueNote: issueNote || `${service.name} assistance needed`,
-        customerLat: locationToUse.latitude,
-        customerLng: locationToUse.longitude,
-        customerAddress: locationToUse.address,
+        serviceId: service?.id,
+        issueNote: issueNote || `${service?.name} assistance needed`,
+        customerLat: locationToUse?.latitude,
+        customerLng: locationToUse?.longitude,
+        customerAddress: locationToUse?.address,
         status: "requested",
-        savedLocationId: locationToUse.savedLocationId,
+        savedLocationId: locationToUse?.savedLocationId,
       };
 
       const { data } = await api.post("/bookings", payload);
       setActiveBooking(data);
       setWaitingForMechanic(true);
       setCurrentTrackingModal("waiting");
-      socket.emit("join:booking", data.id);
+      socketService.joinBookingRoom(data?.id);
+
       await fetchNearbyMechanicsForMap();
 
       Alert.alert(
@@ -583,48 +655,95 @@ export default function CustomerScreen() {
   function startTrackingMechanic(booking: Booking) {
     if (booking.mechanic_id) {
       console.log("Starting tracking for mechanic:", booking.mechanic_id);
-      socket.emit("join:mechanic", booking.mechanic_id);
+      socketService.joinMechanicRoom(booking.mechanic_id);
     }
   }
 
-  async function handleVerifyOTP() {
+async function handleVerifyOTP() {
     if (!otpCode || otpCode.length !== 6) {
-      Alert.alert("Error", "Please enter the 6-digit OTP code");
-      return;
+        Alert.alert("Error", "Please enter the 6-digit OTP code");
+        return;
     }
 
     setCompletingService(true);
     try {
-      const response = await api.post(
-        `/bookings/${activeBooking?.id}/verify-otp`,
-        {
-          otp: otpCode,
-        },
-      );
+        const response = await api.post(`/bookings/${activeBooking?.id}/verify-otp`, {
+            otp: otpCode,
+        });
 
-      if (response.data.success) {
-        setShowOTPModal(false);
-        setOtpCode("");
-        setCompletedBookingId(activeBooking?.id);
-        setActiveBooking((prev: any) => ({ ...prev, status: "completed" }));
-        setShowRatingModal(true);
-        setIsTracking(false);
-        setCurrentTrackingModal(null);
-
-        Alert.alert(
-          "✓ Service Completed!",
-          "Please rate your experience with the mechanic.",
-        );
-      }
+        if (response.data.success) {
+            // Emit OTP verified event to notify mechanic
+socketService.emitOtpVerified(activeBooking?.id);
+            
+            // Clear OTP modal
+            setShowOTPModal(false);
+            setOtpCode("");
+            
+            // Show success message
+            Alert.alert(
+                "✓ Service Completed!",
+                "Thank you for using our service! Please rate your experience.",
+                [
+                    {
+                        text: "Rate Now",
+                        onPress: () => {
+                            setCompletedBookingId(activeBooking?.id);
+                            setShowRatingModal(true);
+                            setActiveBooking(null);
+                            setIsTracking(false);
+                            setCurrentTrackingModal(null);
+                        }
+                    }
+                ]
+            );
+            
+            // Update local state
+            setActiveBooking((prev: any) => ({ ...prev, status: "completed" }));
+            setIsTracking(false);
+            setCurrentTrackingModal(null);
+            
+            // Refresh bookings list
+            await loadBookings();
+        }
     } catch (error: any) {
-      Alert.alert(
-        "Verification Failed",
-        error.response?.data?.error || "Invalid OTP. Please try again.",
-      );
+        console.error("OTP verification error:", error);
+        Alert.alert(
+            "Verification Failed", 
+            error.response?.data?.error || "Invalid OTP. Please try again."
+        );
     } finally {
-      setCompletingService(false);
+        setCompletingService(false);
     }
-  }
+}
+
+// Add useEffect to listen for service completion notifications via socket
+useEffect(() => {
+    // Listen for service completion events
+    socket.on("service:completed", (data: { bookingId: string }) => {
+        if (data.bookingId === activeBooking?.id) {
+            Alert.alert(
+                "✅ Service Completed!",
+                "Your service has been completed. Please rate your experience.",
+                [
+                    {
+                        text: "Rate Now",
+                        onPress: () => {
+                            setCompletedBookingId(activeBooking.id);
+                            setShowRatingModal(true);
+                            setActiveBooking(null);
+                            setIsTracking(false);
+                            setCurrentTrackingModal(null);
+                        }
+                    }
+                ]
+            );
+        }
+    });
+    
+    return () => {
+        socket.off("service:completed");
+    };
+}, [activeBooking]);
 
   async function submitRating() {
     if (customerRating === 0) {
@@ -639,63 +758,52 @@ export default function CustomerScreen() {
         review: customerReview.trim() || undefined,
       });
 
-      Alert.alert(
-        "Thank You!",
-        "Your feedback has been submitted successfully.",
-        [
-          {
-            text: "OK",
-            onPress: () => {
-              setShowRatingModal(false);
-              setCustomerRating(0);
-              setCustomerReview("");
-              setCompletedBookingId(null);
-              setActiveBooking(null);
-              setWaitingForMechanic(false);
-              setIsTracking(false);
-              setCurrentTrackingModal(null);
-              loadBookings();
-            },
+      Alert.alert("Thank You!", "Your feedback has been submitted successfully.", [
+        {
+          text: "OK",
+          onPress: () => {
+            setShowRatingModal(false);
+            setCustomerRating(0);
+            setCustomerReview("");
+            setCompletedBookingId(null);
+            setActiveBooking(null);
+            setWaitingForMechanic(false);
+            setIsTracking(false);
+            setCurrentTrackingModal(null);
+            loadBookings();
           },
-        ],
-      );
+        },
+      ]);
     } catch (error: any) {
-      Alert.alert(
-        "Error",
-        error.response?.data?.error || "Failed to submit rating",
-      );
+      Alert.alert("Error", error.response?.data?.error || "Failed to submit rating");
     } finally {
       setCompletingService(false);
     }
   }
 
   async function cancelActiveBooking() {
-    Alert.alert(
-      "Cancel Request",
-      "Are you sure you want to cancel this request?",
-      [
-        { text: "No", style: "cancel" },
-        {
-          text: "Yes",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await api.patch(`/bookings/${activeBooking?.id}/cancel`, {});
-              setActiveBooking(null);
-              setWaitingForMechanic(false);
-              setIsTracking(false);
-              setCurrentTrackingModal(null);
-              Alert.alert("Cancelled", "Your request has been cancelled.");
-              loadBookings();
-            } catch (error) {
-              Alert.alert("Error", "Failed to cancel request");
-            }
-          },
+    Alert.alert("Cancel Request", "Are you sure you want to cancel this request?", [
+      { text: "No", style: "cancel" },
+      {
+        text: "Yes",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await api.patch(`/bookings/${activeBooking?.id}/cancel`, {});
+            setActiveBooking(null);
+            setWaitingForMechanic(false);
+            setIsTracking(false);
+            setCurrentTrackingModal(null);
+            Alert.alert("Cancelled", "Your request has been cancelled.");
+            loadBookings();
+          } catch (error) {
+            Alert.alert("Error", "Failed to cancel request");
+          }
         },
-      ],
-    );
+      },
+    ]);
   }
-console.log(activeBooking)
+
   async function handleLogout() {
     Alert.alert("Logout", "Are you sure you want to logout?", [
       { text: "Cancel", style: "cancel" },
@@ -718,10 +826,7 @@ console.log(activeBooking)
       <SafeAreaView style={styles.waitingContainer}>
         <View style={styles.waitingHeader}>
           <Text style={styles.waitingHeaderTitle}>Finding a Mechanic</Text>
-          <TouchableOpacity
-            onPress={cancelActiveBooking}
-            style={styles.waitingCancelButton}
-          >
+          <TouchableOpacity onPress={cancelActiveBooking} style={styles.waitingCancelButton}>
             <Ionicons name="close" size={24} color="#EF4444" />
           </TouchableOpacity>
         </View>
@@ -761,9 +866,7 @@ console.log(activeBooking)
                   </View>
                   <Callout>
                     <View style={styles.calloutContainer}>
-                      <Text style={styles.calloutName}>
-                        {mechanic.full_name}
-                      </Text>
+                      <Text style={styles.calloutName}>{mechanic.full_name}</Text>
                       <Text style={styles.calloutDistance}>
                         {mechanic.distance_km?.toFixed(1)} km away
                       </Text>
@@ -779,47 +882,31 @@ console.log(activeBooking)
           <View style={styles.timerContainer}>
             <View style={styles.timerCircle}>
               <Text style={styles.timerText}>
-                {Math.floor(timeRemaining / 60)}:
-                {(timeRemaining % 60).toString().padStart(2, "0")}
+                {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, "0")}
               </Text>
             </View>
             <Text style={styles.timerLabel}>Time remaining</Text>
             <View style={styles.timerProgress}>
-              <View
-                style={[
-                  styles.timerProgressFill,
-                  { width: `${(timeRemaining / 120) * 100}%` },
-                ]}
-              />
+              <View style={[styles.timerProgressFill, { width: `${(timeRemaining / 120) * 100}%` }]} />
             </View>
           </View>
 
           <View style={styles.searchingContainer}>
             <ActivityIndicator size="large" color="#0F172A" />
-            <Text style={styles.searchingText}>
-              Searching for nearby mechanics...
-            </Text>
+            <Text style={styles.searchingText}>Searching for nearby mechanics...</Text>
             <Text style={styles.searchingSubtext}>
-              {nearbyMechanics.length} mechanic
-              {nearbyMechanics.length !== 1 ? "s" : ""} available nearby
+              {nearbyMechanics.length} mechanic{nearbyMechanics.length !== 1 ? "s" : ""} available nearby
             </Text>
           </View>
 
           {selectedService && (
             <View style={styles.serviceInfoBox}>
-              <Text style={styles.serviceInfoText}>
-                Service: {selectedService.name}
-              </Text>
-              {issueNote && (
-                <Text style={styles.serviceInfoText}>Note: {issueNote}</Text>
-              )}
+              <Text style={styles.serviceInfoText}>Service: {selectedService.name}</Text>
+              {issueNote && <Text style={styles.serviceInfoText}>Note: {issueNote}</Text>}
             </View>
           )}
 
-          <TouchableOpacity
-            style={styles.cancelButton}
-            onPress={cancelActiveBooking}
-          >
+          <TouchableOpacity style={styles.cancelButton} onPress={cancelActiveBooking}>
             <Text style={styles.cancelButtonText}>Cancel Request</Text>
           </TouchableOpacity>
         </View>
@@ -827,42 +914,25 @@ console.log(activeBooking)
     </Modal>
   );
 
-  // Render Live Tracking Screen
+  // Render Live Tracking Screen - FIXED VERSION
   const renderTrackingScreen = () => {
-    console.log(
-      "Rendering tracking screen - currentTrackingModal:",
+    console.log("Rendering tracking screen - Status:", {
       currentTrackingModal,
-      "activeBooking status:",
-      activeBooking?.status,
-      "mechanicLocation:",
+      activeBookingStatus: activeBooking?.status,
       mechanicLocation,
-    );
-
-    if (currentTrackingModal !== "tracking" || !activeBooking) {
+      hasRouteInfo: !!routeInfo,
+    });
+    if (currentTrackingModal !== "tracking" || !activeBooking || activeBooking.status === "completed") {
       return null;
     }
 
-    const distance =
-      mechanicLocation && coords
-        ? calculateDistance(
-            coords.latitude,
-            coords.longitude,
-            mechanicLocation.latitude,
-            mechanicLocation.longitude,
-          )
-        : null;
 
-    // If we have mechanic location, show the map with route
-    const hasValidLocations =
-      coords && (mechanicLocation || activeBooking.mechanic_location);
-    const mechanicLatLng =
-      mechanicLocation ||
-      (activeBooking.mechanic_location
-        ? {
-            latitude: activeBooking.mechanic_location.lat,
-            longitude: activeBooking.mechanic_location.lng,
-          }
-        : null);
+    const distance = mechanicLocation && coords
+      ? calculateDistance(coords.latitude, coords.longitude, mechanicLocation.latitude, mechanicLocation.longitude)
+      : null;
+
+    const hasValidLocations = coords && mechanicLocation;
+    const displayMechanicName = mechanicName || activeBooking?.mechanic?.full_name || "Mechanic";
 
     return (
       <Modal
@@ -879,34 +949,37 @@ console.log(activeBooking)
           <View style={styles.trackingHeader}>
             <Text style={styles.trackingTitle}>
               {activeBooking.status === "accepted" && "✓ Mechanic Assigned!"}
-              {activeBooking.status === "on_the_way" &&
-                "🚗 Mechanic is Coming!"}
+              {activeBooking.status === "on_the_way" && "🚗 Mechanic is Coming!"}
               {activeBooking.status === "arrived" && "📍 Mechanic Has Arrived!"}
             </Text>
-            <TouchableOpacity
-              onPress={cancelActiveBooking}
-              style={styles.trackingCancelButton}
-            >
+            <TouchableOpacity onPress={cancelActiveBooking} style={styles.trackingCancelButton}>
               <Ionicons name="close" size={24} color="#EF4444" />
             </TouchableOpacity>
           </View>
 
           <View style={styles.mapContainer}>
-            {hasValidLocations && mechanicLatLng ? (
+            {hasValidLocations ? (
               <MapView
                 ref={mapRef}
                 style={styles.map}
                 provider={PROVIDER_GOOGLE}
                 initialRegion={{
-                  latitude: (coords.latitude + mechanicLatLng.latitude) / 2,
-                  longitude: (coords.longitude + mechanicLatLng.longitude) / 2,
-                  latitudeDelta:
-                    Math.abs(coords.latitude - mechanicLatLng.latitude) * 1.5,
-                  longitudeDelta:
-                    Math.abs(coords.longitude - mechanicLatLng.longitude) * 1.5,
+                  latitude: (coords.latitude + mechanicLocation.latitude) / 2,
+                  longitude: (coords.longitude + mechanicLocation.longitude) / 2,
+                  latitudeDelta: Math.abs(coords.latitude - mechanicLocation.latitude) * 1.5 + 0.01,
+                  longitudeDelta: Math.abs(coords.longitude - mechanicLocation.longitude) * 1.5 + 0.01,
                 }}
                 showsUserLocation={true}
                 showsMyLocationButton={false}
+                onMapReady={() => {
+                  console.log("Map ready, fitting coordinates");
+                  setTimeout(() => {
+                    mapRef.current?.fitToCoordinates([coords, mechanicLocation], {
+                      edgePadding: { top: 100, right: 100, bottom: 100, left: 100 },
+                      animated: true,
+                    });
+                  }, 500);
+                }}
               >
                 {/* Customer Location Marker */}
                 <Marker coordinate={coords} pinColor="#3B82F6">
@@ -919,27 +992,24 @@ console.log(activeBooking)
                 </Marker>
 
                 {/* Mechanic Location Marker */}
-                <Marker coordinate={mechanicLatLng} pinColor="#F59E0B">
+                <Marker coordinate={mechanicLocation} pinColor="#F59E0B">
                   <View style={styles.trackingMechanicMarker}>
                     <Ionicons name="car" size={20} color="#FFF" />
                   </View>
                   <Callout>
-                    <Text style={styles.calloutText}>Mechanic Location</Text>
+                    <Text style={styles.calloutText}>{displayMechanicName}</Text>
                     {distance && (
                       <Text style={styles.calloutDistance}>
-                        {distance < 1
-                          ? `${Math.round(distance * 1000)}m`
-                          : `${distance.toFixed(1)}km`}{" "}
-                        away
+                        {distance < 1 ? `${Math.round(distance * 1000)}m` : `${distance.toFixed(1)}km`} away
                       </Text>
                     )}
                   </Callout>
                 </Marker>
 
-                {/* Route Directions */}
-                {GOOGLE_MAPS_API_KEY && mechanicLatLng && (
+                {/* Route Directions - FIXED */}
+                {GOOGLE_MAPS_API_KEY && GOOGLE_MAPS_API_KEY !== "your_api_key_here" && (
                   <MapViewDirections
-                    origin={mechanicLatLng}
+                    origin={mechanicLocation}
                     destination={coords}
                     apikey={GOOGLE_MAPS_API_KEY}
                     strokeWidth={4}
@@ -947,38 +1017,36 @@ console.log(activeBooking)
                     mode="DRIVING"
                     optimizeWaypoints={true}
                     onReady={(result) => {
-                      console.log(
-                        "Route ready - distance:",
-                        result.distance,
-                        "duration:",
-                        result.duration,
-                      );
+                      console.log("✅ Route ready! Distance:", result.distance, "km, Duration:", result.duration, "min");
                       setRouteInfo({
                         distance: result.distance,
                         duration: result.duration,
+                        distanceText: result.distance < 1 ? `${Math.round(result.distance * 1000)}m` : `${result.distance.toFixed(1)}km`,
+                        durationText: result.duration < 1 ? "< 1 minute" : `${Math.round(result.duration)} min`,
                       });
-                      if (mapRef.current) {
-                        mapRef.current.fitToCoordinates(
-                          [coords, mechanicLatLng],
-                          {
-                            edgePadding: {
-                              top: 100,
-                              right: 100,
-                              bottom: 100,
-                              left: 100,
-                            },
-                            animated: true,
-                          },
-                        );
-                      }
+                      setRouteError(null);
+                      
+                      // Fit map to show full route
+                      mapRef.current?.fitToCoordinates([coords, mechanicLocation], {
+                        edgePadding: { top: 100, right: 100, bottom: 100, left: 100 },
+                        animated: true,
+                      });
                     }}
                     onError={(errorMessage) => {
-                      console.error("Route error:", errorMessage);
-                      // Fall back to straight line on error
-                      setRouteInfo(null);
+                      console.error("❌ Route error:", errorMessage);
+                      setRouteError(errorMessage);
+                      // Retry logic - try again after 3 seconds if failed
+                      if (routeRetryCount.current < 3) {
+                        setTimeout(() => {
+                          routeRetryCount.current++;
+                          console.log(`Retrying route (${routeRetryCount.current}/3)...`);
+                          setRouteInfo(null);
+                        }, 3000);
+                      }
                     }}
                     resetOnChange={false}
                     timePrecision="now"
+                    precision="high"
                   />
                 )}
               </MapView>
@@ -986,10 +1054,14 @@ console.log(activeBooking)
               <View style={styles.loadingMapContainer}>
                 <ActivityIndicator size="large" color="#0F172A" />
                 <Text style={styles.loadingMapText}>
-                  {!coords
-                    ? "Getting your location..."
-                    : "Waiting for mechanic location..."}
+                  {!coords ? "Getting your location..." : "Waiting for mechanic location..."}
                 </Text>
+                <TouchableOpacity
+                  style={styles.refreshLocationButton}
+                  onPress={requestMechanicLocationUpdate}
+                >
+                  <Text style={styles.refreshLocationText}>Refresh Location</Text>
+                </TouchableOpacity>
               </View>
             )}
           </View>
@@ -998,9 +1070,7 @@ console.log(activeBooking)
             <View style={styles.trackingInfoRow}>
               <Ionicons name="person" size={20} color="#64748B" />
               <Text style={styles.trackingInfoLabel}>Mechanic:</Text>
-              <Text style={styles.trackingInfoValue}>
-                {activeBooking.mechanic?.full_name || "Loading..."}
-              </Text>
+              <Text style={styles.trackingInfoValue}>{displayMechanicName}</Text>
             </View>
 
             <View style={styles.trackingInfoRow}>
@@ -1011,50 +1081,58 @@ console.log(activeBooking)
               </Text>
             </View>
 
-            {distance !== null && distance > 0 && (
+            {/* Display Google Maps ETA - FIXED */}
+            {routeInfo && routeInfo.duration > 0 ? (
+              <>
+                <View style={styles.trackingInfoRow}>
+                  <Ionicons name="car" size={20} color="#64748B" />
+                  <Text style={styles.trackingInfoLabel}>ETA:</Text>
+                  <Text style={[styles.trackingInfoValue, styles.etaValue]}>
+                    {routeInfo.durationText}
+                  </Text>
+                </View>
+                <View style={styles.trackingInfoRow}>
+                  <Ionicons name="navigate" size={20} color="#64748B" />
+                  <Text style={styles.trackingInfoLabel}>Distance:</Text>
+                  <Text style={styles.trackingInfoValue}>{routeInfo.distanceText}</Text>
+                </View>
+              </>
+            ) : distance !== null && distance > 0 ? (
+              <>
+                <View style={styles.trackingInfoRow}>
+                  <Ionicons name="location" size={20} color="#64748B" />
+                  <Text style={styles.trackingInfoLabel}>Distance:</Text>
+                  <Text style={styles.trackingInfoValue}>
+                    {distance < 1 ? `${Math.round(distance * 1000)}m` : `${distance.toFixed(1)}km`}
+                  </Text>
+                </View>
+                <View style={styles.trackingInfoRow}>
+                  <Ionicons name="car" size={20} color="#64748B" />
+                  <Text style={styles.trackingInfoLabel}>Est. ETA:</Text>
+                  <Text style={styles.trackingInfoValue}>
+                    {distance < 1 ? "2-3 min" : `~${Math.round(distance * 2)} min`}
+                  </Text>
+                </View>
+                {routeError && (
+                  <Text style={styles.routeErrorText}>Using estimated ETA (GPS only)</Text>
+                )}
+              </>
+            ) : (
               <View style={styles.trackingInfoRow}>
-                <Ionicons name="location" size={20} color="#64748B" />
-                <Text style={styles.trackingInfoLabel}>Distance:</Text>
-                <Text style={styles.trackingInfoValue}>
-                  {distance < 1
-                    ? `${Math.round(distance * 1000)}m`
-                    : `${distance.toFixed(1)}km`}
-                </Text>
-              </View>
-            )}
-
-            {routeInfo && routeInfo.duration > 0 && (
-              <View style={styles.trackingInfoRow}>
-                <Ionicons name="car" size={20} color="#64748B" />
-                <Text style={styles.trackingInfoLabel}>ETA:</Text>
-                <Text style={styles.trackingInfoValue}>
-                  {routeInfo.duration < 1
-                    ? "< 1 minute"
-                    : `~${Math.round(routeInfo.duration)} minutes`}
-                </Text>
+                <ActivityIndicator size="small" color="#64748B" />
+                <Text style={styles.trackingInfoLabel}>Calculating route...</Text>
               </View>
             )}
 
             {activeBooking.status === "arrived" && (
-              <TouchableOpacity
-                style={styles.completeButton}
-                onPress={() => setShowOTPModal(true)}
-              >
-                <Text style={styles.completeButtonText}>
-                  Complete Service with OTP
-                </Text>
+              <TouchableOpacity style={styles.completeButton} onPress={() => setShowOTPModal(true)}>
+                <Text style={styles.completeButtonText}>Complete Service with OTP</Text>
               </TouchableOpacity>
             )}
 
-            {/* Show cancel button for tracking screen */}
             {activeBooking.status !== "arrived" && (
-              <TouchableOpacity
-                style={styles.cancelTrackingButton}
-                onPress={cancelActiveBooking}
-              >
-                <Text style={styles.cancelTrackingButtonText}>
-                  Cancel Service
-                </Text>
+              <TouchableOpacity style={styles.cancelTrackingButton} onPress={cancelActiveBooking}>
+                <Text style={styles.cancelTrackingButtonText}>Cancel Service</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -1071,9 +1149,7 @@ console.log(activeBooking)
           <View style={styles.modalHeader}>
             <Ionicons name="shield-checkmark" size={50} color="#10B981" />
             <Text style={styles.modalTitle}>Verify Service Completion</Text>
-            <Text style={styles.modalSubtitle}>
-              Ask the mechanic for the 6-digit OTP code
-            </Text>
+            <Text style={styles.modalSubtitle}>Ask the mechanic for the 6-digit OTP code</Text>
           </View>
 
           <TextInput
@@ -1098,21 +1174,11 @@ console.log(activeBooking)
               <Text style={styles.cancelModalButtonText}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[
-                styles.modalButton,
-                styles.verifyModalButton,
-                completingService && styles.disabledButton,
-              ]}
+              style={[styles.modalButton, styles.verifyModalButton, completingService && styles.disabledButton]}
               onPress={handleVerifyOTP}
               disabled={completingService}
             >
-              {completingService ? (
-                <ActivityIndicator color="#FFF" size="small" />
-              ) : (
-                <Text style={styles.verifyModalButtonText}>
-                  Verify & Complete
-                </Text>
-              )}
+              {completingService ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={styles.verifyModalButtonText}>Verify & Complete</Text>}
             </TouchableOpacity>
           </View>
         </View>
@@ -1130,23 +1196,14 @@ console.log(activeBooking)
               <Ionicons name="star" size={50} color="#FBBF24" />
               <Text style={styles.modalTitle}>Rate Your Experience</Text>
               <Text style={styles.modalSubtitle}>
-                How was your service with{" "}
-                {activeBooking?.mechanic?.full_name || "the mechanic"}?
+                How was your service with {activeBooking?.mechanic?.full_name || "the mechanic"}?
               </Text>
             </View>
 
             <View style={styles.ratingContainer}>
               {[1, 2, 3, 4, 5].map((star) => (
-                <TouchableOpacity
-                  key={star}
-                  onPress={() => setCustomerRating(star)}
-                  style={styles.starButton}
-                >
-                  <Ionicons
-                    name={star <= customerRating ? "star" : "star-outline"}
-                    size={48}
-                    color="#FBBF24"
-                  />
+                <TouchableOpacity key={star} onPress={() => setCustomerRating(star)} style={styles.starButton}>
+                  <Ionicons name={star <= customerRating ? "star" : "star-outline"} size={48} color="#FBBF24" />
                 </TouchableOpacity>
               ))}
             </View>
@@ -1174,20 +1231,11 @@ console.log(activeBooking)
             />
 
             <TouchableOpacity
-              style={[
-                styles.submitRatingButton,
-                completingService && styles.disabledButton,
-              ]}
+              style={[styles.submitRatingButton, completingService && styles.disabledButton]}
               onPress={submitRating}
               disabled={completingService}
             >
-              {completingService ? (
-                <ActivityIndicator color="#FFF" size="small" />
-              ) : (
-                <Text style={styles.submitRatingButtonText}>
-                  Submit Feedback
-                </Text>
-              )}
+              {completingService ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={styles.submitRatingButtonText}>Submit Feedback</Text>}
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -1248,44 +1296,26 @@ console.log(activeBooking)
         data={services}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={["#0F172A"]}
-            tintColor="#0F172A"
-          />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={["#0F172A"]} tintColor="#0F172A" />}
         ListHeaderComponent={
           <View>
             <View style={styles.header}>
               <View>
                 <Text style={styles.title}>Get Help Fast</Text>
                 <Text style={styles.subtitle}>Request roadside support</Text>
-                {user && (
-                  <Text style={styles.userInfo}>Welcome, {user.full_name}</Text>
-                )}
+                {user && <Text style={styles.userInfo}>Welcome, {user.full_name}</Text>}
               </View>
-              <TouchableOpacity
-                onPress={handleLogout}
-                style={styles.logoutButton}
-              >
+              <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
                 <Text style={styles.logoutText}>Logout</Text>
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity
-              style={styles.locationSelector}
-              onPress={() => setShowLocationPicker(true)}
-            >
+            <TouchableOpacity style={styles.locationSelector} onPress={() => setShowLocationPicker(true)}>
               <Ionicons name="location-outline" size={24} color="#0F172A" />
               <View style={styles.locationSelectorText}>
-                <Text style={styles.locationSelectorLabel}>
-                  Service Location
-                </Text>
+                <Text style={styles.locationSelectorLabel}>Service Location</Text>
                 <Text style={styles.locationSelectorAddress} numberOfLines={1}>
-                  {selectedLocation?.address ||
-                    (coords ? "Current Location" : "Select a location")}
+                  {selectedLocation?.address || (coords ? "Current Location" : "Select a location")}
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={20} color="#64748B" />
@@ -1303,11 +1333,7 @@ console.log(activeBooking)
           </View>
         }
         renderItem={({ item }) => (
-          <ServiceCard
-            item={item}
-            onPress={() => createBooking(item)}
-            disabled={creatingBooking || !!activeBooking}
-          />
+          <ServiceCard item={item} onPress={() => createBooking(item)} disabled={creatingBooking || !!activeBooking} />
         )}
         showsVerticalScrollIndicator={false}
       />
@@ -1532,6 +1558,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   statusValue: { color: "#10B981", fontWeight: "700" },
+  etaValue: { color: "#F59E0B", fontWeight: "700" },
+  routeErrorText: { fontSize: 12, color: "#EF4444", textAlign: "center", marginTop: 8 },
 
   completeButton: {
     backgroundColor: "#10B981",
@@ -1561,6 +1589,17 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 14,
     color: "#64748B",
+  },
+  refreshLocationButton: {
+    marginTop: 16,
+    padding: 10,
+    backgroundColor: "#0F172A",
+    borderRadius: 8,
+  },
+  refreshLocationText: {
+    color: "#FFF",
+    fontSize: 14,
+    fontWeight: "600",
   },
 
   // Modal Styles

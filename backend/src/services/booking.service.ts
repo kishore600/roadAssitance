@@ -538,9 +538,8 @@ export async function cleanupExpiredBookings() {
   console.log(`✅ Cleaned up ${expiredBookings?.length || 0} expired bookings`);
 }
 
-// In your booking.service.ts
+// services/booking.service.ts - Update the verifyOTPAndComplete function
 
-// Modified verifyOTPAndComplete - now only verifies OTP and marks as completed
 export async function verifyOTPAndComplete(bookingId: string, otp: string) {
     // First, get the booking to verify OTP
     const { data: booking, error: fetchError } = await supabaseAdmin
@@ -555,8 +554,9 @@ export async function verifyOTPAndComplete(bookingId: string, otp: string) {
         throw new Error('Booking not found');
     }
     
-    if (booking.status !== 'arrived') {
-        throw new Error('Mechanic must arrive before completing service');
+    // Allow completion for arrived or on_the_way status
+    if (booking.status !== 'arrived' && booking.status !== 'on_the_way') {
+        throw new Error('Service cannot be completed at this stage');
     }
     
     if (!booking.completion_otp || !booking.otp_expires_at) {
@@ -573,7 +573,7 @@ export async function verifyOTPAndComplete(bookingId: string, otp: string) {
         throw new Error('Invalid OTP. Please try again');
     }
     
-    // Update booking to completed without rating
+    // Update booking to completed
     const { data, error } = await supabaseAdmin
         .from('bookings')
         .update({
@@ -585,11 +585,13 @@ export async function verifyOTPAndComplete(bookingId: string, otp: string) {
         .select(`
             *,
             customer:profiles!bookings_customer_id_fkey(
+                id,
                 full_name, 
                 email,
                 phone
             ),
             mechanic:profiles!bookings_mechanic_id_fkey(
+                id,
                 full_name, 
                 email,
                 phone
@@ -613,10 +615,57 @@ export async function verifyOTPAndComplete(bookingId: string, otp: string) {
         })
         .eq('id', bookingId);
     
+    // Emit socket event for real-time update
     emitBookingUpdate(bookingId, data);
+    
+    // Send push notifications for service completion
+    // await sendServiceCompletionNotifications(data);
+    
     return data;
 }
 
+// Add push notification function
+async function sendServiceCompletionNotifications(booking: any) {
+    const notifications = [];
+    
+    // Notify customer
+    if (booking.customer?.expo_push_token) {
+        notifications.push(
+            sendPushNotification(booking.customer.expo_push_token, {
+                title: "✅ Service Completed!",
+                body: `Your service with ${booking.mechanic?.full_name} has been completed. Please rate your experience.`,
+                data: { 
+                    type: "service_completed", 
+                    bookingId: booking.id,
+                    screen: "rating"
+                }
+            })
+        );
+    }
+    
+    // Notify mechanic
+    if (booking.mechanic?.expo_push_token) {
+        notifications.push(
+            sendPushNotification(booking.mechanic.expo_push_token, {
+                title: "✅ Service Completed!",
+                body: `You have completed service for ${booking.customer?.full_name}.`,
+                data: { 
+                    type: "service_completed", 
+                    bookingId: booking.id 
+                }
+            })
+        );
+    }
+    
+    await Promise.all(notifications);
+}
+
+// Helper function to send push notification
+async function sendPushNotification(expoPushToken: string, message: any) {
+    // Implement using Expo's push notification service
+    // You'll need to add expo-server-sdk
+    console.log(`Sending push notification to ${expoPushToken}:`, message);
+}
 // New function to add customer rating after completion
 export async function addCustomerRating(bookingId: string, rating: number, review?: string) {
     if (rating < 1 || rating > 5) {
@@ -792,6 +841,31 @@ export async function getBookingWithRatings(bookingId: string) {
     if (error) throw error;
     return data;
 }
+
+export async function getMechanicTodayEarnings(mechanicId: string) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    const { data, error } = await supabaseAdmin
+        .from('bookings')
+        .select('amount')
+        .eq('mechanic_id', mechanicId)
+        .eq('status', 'completed')
+        .gte('completed_at', today.toISOString())
+        .lt('completed_at', tomorrow.toISOString());
+    
+    if (error) throw error;
+    
+    const total = data?.reduce((sum, booking) => sum + (booking.amount || 0), 0) || 0;
+    
+    return {
+        total,
+        count: data?.length || 0
+    };
+}
+
 
 // Get mechanic's average rating
 export async function getMechanicRating(mechanicId: string) {

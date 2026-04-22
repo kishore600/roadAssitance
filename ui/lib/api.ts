@@ -31,6 +31,21 @@ class API {
     }
   }
 
+    async setUser(user: any) {
+    if (user && user.id) {
+      await SecureStore.setItemAsync('user', JSON.stringify(user));
+      // Also notify socket service
+      const { socketService } = await import('./socket');
+      socketService.setUser(user.id);
+    }
+  }
+
+   async clearUser() {
+    await SecureStore.deleteItemAsync('user');
+    const { socketService } = await import('./socket');
+    socketService.clearUser();
+  }
+  
   async setToken(token: string) {
     this.token = token;
     await SecureStore.setItemAsync('auth_token', token);

@@ -1,4 +1,4 @@
-// server/socket.js - Fixed version
+// server/socket.js - Fixed version with OTP verification
 import { Server } from 'socket.io';
 
 let io:any;
@@ -8,6 +8,14 @@ export function initSocket(server:any) {
   
   io.on('connection', (socket:any) => {
     console.log('User connected:', socket.id);
+
+    // Join user to their personal room for direct notifications
+    socket.on('user:join', (userId:any) => {
+      if (userId) {
+        socket.join(`user:${userId}`);
+        console.log(`User ${userId} joined their personal room`);
+      }
+    });
 
     // Join booking room
     socket.on('join:booking', (bookingId:any) => {
@@ -64,6 +72,14 @@ export function initSocket(server:any) {
           updated_at: timestamp || new Date().toISOString(),
           ...(mechanicLocation && { mechanic_location: mechanicLocation })
         });
+        
+        // If status is completed, emit specific completion event
+        if (status === 'completed') {
+          io.to(`booking:${bookingId}`).emit('service:completed', { 
+            bookingId: bookingId,
+            completedAt: timestamp || new Date().toISOString()
+          });
+        }
       }
     });
 
@@ -114,15 +130,65 @@ export function initSocket(server:any) {
       }
     });
 
+    // Handle OTP verification from customer
+    socket.on('otp:verified', (data:any) => {
+      const { bookingId } = data;
+      console.log(`🔐 OTP verified for booking: ${bookingId}`);
+      
+      if (bookingId) {
+        // Forward to the booking room so mechanic gets notified
+        io.to(`booking:${bookingId}`).emit('otp:verified', { bookingId });
+        console.log(`Emitted otp:verified to booking:${bookingId}`);
+      }
+    });
+
     // Handle booking completion
     socket.on('booking:complete', (data:any) => {
-      const { bookingId, completedAt } = data;
+      const { bookingId, completedAt, customerId, mechanicId, mechanicName, customerName } = data;
       console.log(`Booking completed: ${bookingId}`);
       
       if (bookingId) {
-        io.to(`booking:${bookingId}`).emit('booking:completed', {
+        // Emit to booking room
+        io.to(`booking:${bookingId}`).emit('service:completed', {
           bookingId: bookingId,
           completedAt: completedAt || new Date().toISOString()
+        });
+        
+        // Also emit to user rooms for direct notifications
+        if (customerId) {
+          io.to(`user:${customerId}`).emit('service:completed', {
+            bookingId: bookingId,
+            mechanicName: mechanicName || 'Mechanic',
+            completedAt: completedAt || new Date().toISOString()
+          });
+        }
+        
+        if (mechanicId) {
+          io.to(`user:${mechanicId}`).emit('service:completed', {
+            bookingId: bookingId,
+            customerName: customerName || 'Customer',
+            completedAt: completedAt || new Date().toISOString()
+          });
+        }
+        
+        // Also emit general booking status update
+        io.to(`booking:${bookingId}`).emit('booking:status:updated', {
+          id: bookingId,
+          status: 'completed',
+          updated_at: completedAt || new Date().toISOString()
+        });
+      }
+    });
+
+    // Handle customer requesting mechanic location
+    socket.on('customer:request:mechanic:location', (data:any) => {
+      const { bookingId } = data;
+      console.log(`Customer requested mechanic location for booking: ${bookingId}`);
+      
+      if (bookingId) {
+        io.to(`booking:${bookingId}`).emit('request:mechanic:location', {
+          bookingId: bookingId,
+          requestedAt: new Date().toISOString()
         });
       }
     });
@@ -145,7 +211,31 @@ export function initSocket(server:any) {
 // Helper functions to emit events from elsewhere in the app
 export function emitBookingUpdate(bookingId:any, data:any) {
   if (io) {
-    io.to(`booking:${bookingId}`).emit('booking:updated', data);
+    io.to(`booking:${bookingId}`).emit('booking:status:updated', data);
+    
+    // If booking is completed, emit specific completion event
+    if (data.status === 'completed') {
+      io.to(`booking:${bookingId}`).emit('service:completed', { 
+        bookingId: bookingId,
+        completedAt: new Date().toISOString()
+      });
+      
+      if (data.customer_id) {
+        io.to(`user:${data.customer_id}`).emit('service:completed', {
+          bookingId: bookingId,
+          mechanicName: data.mechanic?.full_name || 'Mechanic',
+          completedAt: new Date().toISOString()
+        });
+      }
+      
+      if (data.mechanic_id) {
+        io.to(`user:${data.mechanic_id}`).emit('service:completed', {
+          bookingId: bookingId,
+          customerName: data.customer?.full_name || 'Customer',
+          completedAt: new Date().toISOString()
+        });
+      }
+    }
   }
 }
 
@@ -158,6 +248,13 @@ export function emitMechanicLocation(data:any) {
 export function emitNewBooking(bookingData:any) {
   if (io) {
     io.emit('booking:new', bookingData);
+  }
+}
+
+export function emitOtpVerified(bookingId: string) {
+  if (io) {
+    io.to(`booking:${bookingId}`).emit('otp:verified', { bookingId });
+    console.log(`OTP verified event emitted for booking: ${bookingId}`);
   }
 }
 

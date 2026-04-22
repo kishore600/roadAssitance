@@ -80,6 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         
         // Set token in API client for subsequent requests
         await api.setToken(data.token);
+        await api.setUser(data.user);
         setUser(data.user);
         
         // Navigate based on role

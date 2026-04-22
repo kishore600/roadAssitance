@@ -19,7 +19,7 @@ import { api } from "@/lib/api";
 import { Booking } from "@/types";
 import { useAuth } from "@/context/AuthContext";
 import { router } from "expo-router";
-import { socket } from "@/lib/socket";
+import { socket, socketService } from "@/lib/socket";
 import { Ionicons } from "@expo/vector-icons";
 
 // Distance calculation function
@@ -60,18 +60,36 @@ export default function MechanicDashboard() {
   const [selectedCompletedBooking, setSelectedCompletedBooking] = useState<any>(null);
   const [showRatingsDetailModal, setShowRatingsDetailModal] = useState(false);
   const [selectedRatingsBooking, setSelectedRatingsBooking] = useState<any>(null);
+  const [todayEarnings, setTodayEarnings] = useState(0);
+  const [todaysJobsCount, setTodaysJobsCount] = useState(0);
   
-  // Add activeBooking state
   const [activeBooking, setActiveBooking] = useState<any | null>(null);
+  const [otpVerifiedMap, setOtpVerifiedMap] = useState<{ [key: string]: boolean }>({});
   
   let locationInterval: any;
 
-  // Function to calculate ETA based on current location and customer location
   function calculateETA(mechanicLat: number, mechanicLng: number, customerLat: number, customerLng: number): number {
     const distance = calculateDistance(mechanicLat, mechanicLng, customerLat, customerLng);
-    // Assuming average speed of 30 km/h in city
     const etaMinutes = Math.ceil((distance / 30) * 60);
-    return Math.min(etaMinutes, 30); // Cap at 30 minutes
+    return Math.min(etaMinutes, 30);
+  }
+
+  const isOtpVerifiedForCurrentBooking = () => {
+    if (!activeBooking?.id) return false;
+    return otpVerifiedMap[activeBooking.id] || false;
+  };
+
+  async function fetchTodayEarnings() {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const { data } = await api.get(`/bookings/mechanic/${user?.id}/earnings`, {
+        params: { date: today }
+      });
+      setTodayEarnings(data.total || 0);
+      setTodaysJobsCount(data.count || 0);
+    } catch (error) {
+      console.error("Failed to fetch today's earnings:", error);
+    }
   }
 
   async function generateOTPForCompletion(bookingId: string) {
@@ -80,6 +98,7 @@ export default function MechanicDashboard() {
       if (response.data.success) {
         setGeneratedOTP(response.data.otp);
         setShowOTPModal(true);
+        setOtpVerifiedMap(prev => ({ ...prev, [bookingId]: false }));
         
         Alert.alert(
           "OTP Generated",
@@ -92,6 +111,40 @@ export default function MechanicDashboard() {
     }
   }
 
+// In MechanicDashboard component, update the useEffect for OTP verification
+
+// Listen for OTP verification from customer
+useEffect(() => {
+  const handleOtpVerified = (data: { bookingId: string }) => {
+    console.log("✅ OTP verified event received in mechanic:", data);
+    if (data.bookingId) {
+      // Update the OTP verified map for this specific booking
+      setOtpVerifiedMap(prev => ({ ...prev, [data.bookingId]: true }));
+      
+      // If this is the current active booking, show alert
+      if (data.bookingId === activeBooking?.id) {
+        Alert.alert(
+          "✓ OTP Verified!",
+          "Customer has verified the OTP. You can now complete the service.",
+          [{ text: "OK" }]
+        );
+        
+        // Auto-refresh the jobs list to update the UI
+        loadMyJobs();
+      }
+    }
+  };
+
+  // Use socket.on directly or socketService.on
+  socket.on('otp:verified', handleOtpVerified);
+  // Also try socketService for consistency
+  socketService.on('otp:verified', handleOtpVerified);
+
+  return () => {
+    socket.off('otp:verified', handleOtpVerified);
+    socketService.off('otp:verified', handleOtpVerified);
+  };
+}, [activeBooking?.id]);
   async function rateCustomer(booking: any) {
     setSelectedCompletedBooking(booking);
     setShowRatingModal(true);
@@ -114,6 +167,7 @@ export default function MechanicDashboard() {
       setCustomerRating(0);
       setCustomerReview("");
       loadMyJobs();
+      fetchTodayEarnings();
     } catch (error: any) {
       Alert.alert("Error", error.response?.data?.error || "Failed to submit rating");
     }
@@ -121,23 +175,46 @@ export default function MechanicDashboard() {
 
   async function updateStatus(bookingId: string, status: "on_the_way" | "arrived" | "completed") {
     try {
+      if (status === "completed" && !isOtpVerifiedForCurrentBooking()) {
+        Alert.alert(
+          "OTP Required",
+          "Please wait for the customer to verify the OTP before completing the service.",
+          [{ text: "OK" }]
+        );
+        return;
+      }
+
       const response = await api.patch(`/bookings/${bookingId}/status`, { status });
       const updatedBooking = response.data;
+      console.log(`Booking ${bookingId} status updated to ${status}:`, updatedBooking);
 
-      socket.emit("booking:status:update", {
-        bookingId: bookingId,
-        status: status,
-        timestamp: new Date().toISOString(),
-      });
+      socketService.updateBookingStatus(bookingId, status);
 
       if (status === "arrived") {
         await generateOTPForCompletion(bookingId);
+      }
+      
+      if (status === "completed") {
+        const completedJob = myJobs.find(job => job.id === bookingId);
+        if (completedJob) {
+          socketService.completeBooking(
+            bookingId,
+            completedJob.customer_id,
+            user?.id,
+            user?.full_name,
+            completedJob.customer?.full_name
+          );
+        }
+        await fetchTodayEarnings();
+        setShowOTPModal(false);
+        setGeneratedOTP("");
+        // Clear OTP verification for this booking
+        setOtpVerifiedMap(prev => ({ ...prev, [bookingId]: false }));
       }
 
       Alert.alert("Updated", `Booking marked as ${status.replace("_", " ")}.`);
       await loadMyJobs();
       
-      // Update active booking if needed
       if (status === "completed" || status === "arrived") {
         const active = myJobs.find(job => job.id === bookingId && job.status !== "completed");
         setActiveBooking(active || null);
@@ -148,7 +225,6 @@ export default function MechanicDashboard() {
     }
   }
 
-  // View ratings details
   const viewRatingsDetails = (booking: Booking) => {
     setSelectedRatingsBooking(booking);
     setShowRatingsDetailModal(true);
@@ -171,7 +247,6 @@ export default function MechanicDashboard() {
     return <View style={{ flexDirection: 'row', gap: 2 }}>{stars}</View>;
   };
 
-  // Send location update for a specific booking
   const sendLocationUpdate = async (bookingId: string) => {
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
@@ -188,28 +263,12 @@ export default function MechanicDashboard() {
       
       setCurrentLocation(newLocation);
       
-      // Find the active job details
       const activeJob = myJobs.find(job => job.id === bookingId);
       
       if (activeJob && activeJob.customer_lat && activeJob.customer_lng) {
         const eta = calculateETA(newLocation.lat, newLocation.lng, activeJob.customer_lat, activeJob.customer_lng);
         
-        const locationData = {
-          bookingId: bookingId,
-          location: {
-            lat: newLocation.lat,
-            lng: newLocation.lng,
-          },
-          eta: eta,
-          mechanicId: user?.id,
-          timestamp: new Date().toISOString()
-        };
-        
-        console.log("Sending location update for booking:", bookingId, locationData);
-        socket.emit("mechanic:location:update", locationData);
-        socket.emit("mechanic:location", locationData);
-        
-        // Also update location in API
+        socketService.sendMechanicLocation(bookingId, newLocation, eta, user?.id);
         await api.patch(`/mechanics/${user?.id}/location`, newLocation);
       }
     } catch (error) {
@@ -217,9 +276,7 @@ export default function MechanicDashboard() {
     }
   };
 
-  // Start periodic location tracking for active jobs
   useEffect(() => {
-    // Find active job (accepted, on_the_way, or arrived but not completed)
     const activeJob = myJobs.find(job => 
       job.status === 'accepted' || job.status === 'on_the_way' || job.status === 'arrived'
     );
@@ -228,14 +285,11 @@ export default function MechanicDashboard() {
     
     if (activeJob && online) {
       console.log("Starting location tracking for active job:", activeJob.id);
-      
-      // Send initial location immediately
       sendLocationUpdate(activeJob.id);
       
-      // Set up interval for periodic updates
       const interval = setInterval(() => {
         sendLocationUpdate(activeJob.id);
-      }, 5000); // Update every 5 seconds
+      }, 5000);
       
       return () => {
         console.log("Cleaning up location tracking interval");
@@ -248,6 +302,7 @@ export default function MechanicDashboard() {
     if (user) {
       loadData();
       getCurrentLocation();
+      fetchTodayEarnings();
     }
 
     socket.on("booking:new", (booking: any) => {
@@ -401,23 +456,19 @@ export default function MechanicDashboard() {
 
     setAccepting(true);
     try {
-      const response = await api.patch(`/bookings/${selectedBooking.id}/assign`, {
+      await api.patch(`/bookings/${selectedBooking.id}/assign`, {
         mechanicId: user?.id,
         etaMinutes: 15,
         status: "accepted",
       });
 
-      socket.emit("booking:accept", {
-        bookingId: selectedBooking.id,
-        mechanic: {
-          id: user?.id,
-          full_name: user?.full_name,
-          phone: user?.phone,
-        },
-        eta: 15,
-      });
+      socketService.acceptBooking(selectedBooking.id, {
+        id: user?.id,
+        full_name: user?.full_name,
+        phone: user?.phone,
+      }, 15);
 
-      socket.emit("join:booking", selectedBooking.id);
+      socketService.joinBookingRoom(selectedBooking.id);
 
       Alert.alert("✓ Accepted!", "You have accepted the job. Navigate to the customer's location now.");
 
@@ -443,6 +494,7 @@ export default function MechanicDashboard() {
     setRefreshing(true);
     await getCurrentLocation();
     await loadData();
+    await fetchTodayEarnings();
     setRefreshing(false);
   }, []);
 
@@ -450,6 +502,7 @@ export default function MechanicDashboard() {
     const isMyJob = activeTab === "myJobs";
     const hasCustomerRating = item.customer_rating;
     const hasMechanicRating = item.mechanic_rating;
+    const isOtpVerified = otpVerifiedMap[item.id] || false;
     
     return (
       <View style={styles.card}>
@@ -490,7 +543,6 @@ export default function MechanicDashboard() {
           </Text>
         )}
 
-        {/* Rating Summary */}
         {(item.status === 'completed' || hasCustomerRating || hasMechanicRating) && (
           <TouchableOpacity 
             style={styles.ratingSummary}
@@ -516,14 +568,12 @@ export default function MechanicDashboard() {
           </TouchableOpacity>
         )}
 
-        {/* Action Buttons for Available Jobs */}
         {!isMyJob && item.status === "requested" && (
           <TouchableOpacity style={styles.acceptButton} onPress={() => acceptJob(item)}>
             <Text style={styles.acceptButtonText}>Accept Job</Text>
           </TouchableOpacity>
         )}
 
-        {/* Status Update Buttons for My Jobs */}
         {isMyJob && item.status !== "completed" && item.status !== "cancelled" && (
           <View style={styles.row}>
             {item.status === "accepted" && (
@@ -552,17 +602,23 @@ export default function MechanicDashboard() {
                   <Text style={[styles.smallBtnText, { color: "#FFF" }]}>Show OTP</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.smallBtn, styles.completeBtn]}
+                  style={[
+                    styles.smallBtn, 
+                    styles.completeBtn, 
+                    !isOtpVerified && styles.disabledButton
+                  ]}
                   onPress={() => updateStatus(item.id, "completed")}
+                  disabled={!isOtpVerified}
                 >
-                  <Text style={[styles.smallBtnText, { color: "#FFF" }]}>Complete</Text>
+                  <Text style={[styles.smallBtnText, { color: "#FFF" }]}>
+                    {isOtpVerified ? "Complete" : "Waiting for OTP..."}
+                  </Text>
                 </TouchableOpacity>
               </>
             )}
           </View>
         )}
 
-        {/* Rate Customer Button for Completed Jobs */}
         {isMyJob && item.status === "completed" && !item.mechanic_rating && (
           <TouchableOpacity
             style={[styles.acceptButton, { backgroundColor: "#8B5CF6", marginTop: 12 }]}
@@ -644,6 +700,9 @@ export default function MechanicDashboard() {
               Share this OTP with the customer to complete the service
             </Text>
             <Text style={styles.otpExpiry}>Valid for 10 minutes</Text>
+            <Text style={[styles.otpStatus, isOtpVerifiedForCurrentBooking() && styles.otpVerified]}>
+              {isOtpVerifiedForCurrentBooking() ? "✓ OTP Verified" : "⏳ Waiting for customer verification..."}
+            </Text>
             <TouchableOpacity
               style={styles.modalCloseButton}
               onPress={() => setShowOTPModal(false)}
@@ -734,7 +793,6 @@ export default function MechanicDashboard() {
                     </Text>
                   </View>
 
-                  {/* Customer Rating */}
                   <View style={styles.ratingSection}>
                     <View style={styles.ratingHeader}>
                       <View style={styles.ratingTitleContainer}>
@@ -771,7 +829,6 @@ export default function MechanicDashboard() {
                     </View>
                   </View>
 
-                  {/* Your Rating of Customer */}
                   <View style={styles.ratingSection}>
                     <View style={styles.ratingHeader}>
                       <View style={styles.ratingTitleContainer}>
@@ -826,6 +883,21 @@ export default function MechanicDashboard() {
         <Text style={styles.headerTitle}>Mechanic Dashboard</Text>
         <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
           <Ionicons name="log-out-outline" size={22} color="#EF4444" />
+        </TouchableOpacity>
+      </View>
+
+      {/* Today's Earnings Card */}
+      <View style={styles.earningsCard}>
+        <View style={styles.earningsLeft}>
+          <Ionicons name="cash-outline" size={28} color="#10B981" />
+          <View>
+            <Text style={styles.earningsLabel}>Today's Earnings</Text>
+            <Text style={styles.earningsAmount}>₹{todayEarnings}</Text>
+            <Text style={styles.earningsSubtext}>{todaysJobsCount} jobs completed</Text>
+          </View>
+        </View>
+        <TouchableOpacity onPress={fetchTodayEarnings} style={styles.refreshEarnings}>
+          <Ionicons name="refresh-outline" size={20} color="#64748B" />
         </TouchableOpacity>
       </View>
 
@@ -920,6 +992,28 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 22, fontWeight: "800", color: "#0F172A" },
   logoutButton: { padding: 8 },
+  
+  earningsCard: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#FFF",
+    margin: 16,
+    marginTop: 8,
+    marginBottom: 8,
+    padding: 16,
+    borderRadius: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  earningsLeft: { flexDirection: "row", alignItems: "center", gap: 12 },
+  earningsLabel: { fontSize: 12, color: "#64748B", marginBottom: 2 },
+  earningsAmount: { fontSize: 24, fontWeight: "800", color: "#0F172A" },
+  earningsSubtext: { fontSize: 11, color: "#94A3B8", marginTop: 2 },
+  refreshEarnings: { padding: 8 },
   
   statusBar: {
     flexDirection: "row",
@@ -1056,13 +1150,13 @@ const styles = StyleSheet.create({
   primaryBtn: { backgroundColor: "#0F172A" },
   otpBtn: { backgroundColor: "#10B981" },
   completeBtn: { backgroundColor: "#8B5CF6" },
+  disabledButton: { opacity: 0.5, backgroundColor: "#94A3B8" },
   smallBtnText: { fontWeight: "700", fontSize: 12, color: "#FFF" },
   
   emptyState: { padding: 48, alignItems: "center" },
   emptyStateText: { fontSize: 16, fontWeight: "600", color: "#64748B", marginTop: 12 },
   emptyStateSubtext: { fontSize: 14, color: "#94A3B8", textAlign: "center", marginTop: 8 },
   
-  // Modal styles
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
@@ -1106,7 +1200,6 @@ const styles = StyleSheet.create({
   modalAcceptButton: { backgroundColor: "#0F172A" },
   modalAcceptText: { color: "#FFF", fontWeight: "600" },
   
-  // OTP Modal specific
   otpHeader: { alignItems: "center", marginBottom: 16 },
   otpDisplayText: {
     fontSize: 48,
@@ -1118,10 +1211,11 @@ const styles = StyleSheet.create({
   },
   otpInstruction: { fontSize: 14, color: "#64748B", textAlign: "center", marginBottom: 8 },
   otpExpiry: { fontSize: 12, color: "#EF4444", textAlign: "center", marginBottom: 20 },
+  otpStatus: { fontSize: 14, fontWeight: "600", color: "#F59E0B", textAlign: "center", marginBottom: 16 },
+  otpVerified: { color: "#10B981" },
   modalCloseButton: { backgroundColor: "#0F172A", padding: 12, borderRadius: 8, alignItems: "center" },
   modalCloseText: { color: "#FFF", fontWeight: "600" },
   
-  // Rating specific
   ratingContainer: { flexDirection: "row", justifyContent: "center", marginVertical: 20 },
   starButton: { padding: 8 },
   reviewInput: {
@@ -1133,7 +1227,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   
-  // Ratings Detail Modal
   ratingsBody: { paddingBottom: 16 },
   bookingInfo: { backgroundColor: "#F1F5F9", padding: 12, borderRadius: 12, marginBottom: 20 },
   bookingInfoText: { fontSize: 14, fontWeight: "600", color: "#0F172A" },
