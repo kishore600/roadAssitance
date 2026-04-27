@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "RoadAssist",
-    "slug": "road-assist",
+    "name": "Moto108",
+    "slug": "moto-108",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -12,7 +12,7 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "com.roadassist.bikerepair",
+      "package": "com.moto108.emergency",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
