@@ -13,6 +13,8 @@ import {
   Modal,
   TextInput,
   ScrollView,
+  Platform,
+  Linking,
 } from "react-native";
 import * as Location from "expo-location";
 import { api } from "@/lib/api";
@@ -23,7 +25,12 @@ import { socket, socketService } from "@/lib/socket";
 import { Ionicons } from "@expo/vector-icons";
 
 // Distance calculation function
-function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+function calculateDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
@@ -43,7 +50,9 @@ export default function MechanicDashboard() {
   const [online, setOnline] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<"available" | "myJobs">("available");
+  const [activeTab, setActiveTab] = useState<"available" | "myJobs">(
+    "available",
+  );
   const [currentLocation, setCurrentLocation] = useState<{
     lat: number;
     lng: number;
@@ -57,19 +66,34 @@ export default function MechanicDashboard() {
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [customerRating, setCustomerRating] = useState(0);
   const [customerReview, setCustomerReview] = useState("");
-  const [selectedCompletedBooking, setSelectedCompletedBooking] = useState<any>(null);
+  const [selectedCompletedBooking, setSelectedCompletedBooking] =
+    useState<any>(null);
   const [showRatingsDetailModal, setShowRatingsDetailModal] = useState(false);
-  const [selectedRatingsBooking, setSelectedRatingsBooking] = useState<any>(null);
+  const [selectedRatingsBooking, setSelectedRatingsBooking] =
+    useState<any>(null);
   const [todayEarnings, setTodayEarnings] = useState(0);
   const [todaysJobsCount, setTodaysJobsCount] = useState(0);
-  
+  const [isTrackingVisible, setIsTrackingVisible] = useState(false);
+  const [currentJob, setCurrentJob] = useState<any>(null);
   const [activeBooking, setActiveBooking] = useState<any | null>(null);
-  const [otpVerifiedMap, setOtpVerifiedMap] = useState<{ [key: string]: boolean }>({});
-  
+  const [otpVerifiedMap, setOtpVerifiedMap] = useState<{
+    [key: string]: boolean;
+  }>({});
+
   let locationInterval: any;
 
-  function calculateETA(mechanicLat: number, mechanicLng: number, customerLat: number, customerLng: number): number {
-    const distance = calculateDistance(mechanicLat, mechanicLng, customerLat, customerLng);
+  function calculateETA(
+    mechanicLat: number,
+    mechanicLng: number,
+    customerLat: number,
+    customerLng: number,
+  ): number {
+    const distance = calculateDistance(
+      mechanicLat,
+      mechanicLng,
+      customerLat,
+      customerLng,
+    );
     const etaMinutes = Math.ceil((distance / 30) * 60);
     return Math.min(etaMinutes, 30);
   }
@@ -81,10 +105,13 @@ export default function MechanicDashboard() {
 
   async function fetchTodayEarnings() {
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const { data } = await api.get(`/bookings/mechanic/${user?.id}/earnings`, {
-        params: { date: today }
-      });
+      const today = new Date().toISOString().split("T")[0];
+      const { data } = await api.get(
+        `/bookings/mechanic/${user?.id}/earnings`,
+        {
+          params: { date: today },
+        },
+      );
       setTodayEarnings(data.total || 0);
       setTodaysJobsCount(data.count || 0);
     } catch (error) {
@@ -94,57 +121,63 @@ export default function MechanicDashboard() {
 
   async function generateOTPForCompletion(bookingId: string) {
     try {
-      const response = await api.post(`/bookings/${bookingId}/generate-otp`, {});
+      const response = await api.post(
+        `/bookings/${bookingId}/generate-otp`,
+        {},
+      );
       if (response.data.success) {
         setGeneratedOTP(response.data.otp);
         setShowOTPModal(true);
-        setOtpVerifiedMap(prev => ({ ...prev, [bookingId]: false }));
-        
+        setOtpVerifiedMap((prev) => ({ ...prev, [bookingId]: false }));
+
         Alert.alert(
           "OTP Generated",
           `Share this OTP with the customer: ${response.data.otp}\n\nThis OTP will expire in 10 minutes.`,
-          [{ text: "OK" }]
+          [{ text: "OK" }],
         );
       }
     } catch (error: any) {
-      Alert.alert("Error", error.response?.data?.error || "Failed to generate OTP");
+      Alert.alert(
+        "Error",
+        error.response?.data?.error || "Failed to generate OTP",
+      );
     }
   }
 
-// In MechanicDashboard component, update the useEffect for OTP verification
+  // In MechanicDashboard component, update the useEffect for OTP verification
 
-// Listen for OTP verification from customer
-useEffect(() => {
-  const handleOtpVerified = (data: { bookingId: string }) => {
-    console.log("✅ OTP verified event received in mechanic:", data);
-    if (data.bookingId) {
-      // Update the OTP verified map for this specific booking
-      setOtpVerifiedMap(prev => ({ ...prev, [data.bookingId]: true }));
-      
-      // If this is the current active booking, show alert
-      if (data.bookingId === activeBooking?.id) {
-        Alert.alert(
-          "✓ OTP Verified!",
-          "Customer has verified the OTP. You can now complete the service.",
-          [{ text: "OK" }]
-        );
-        
-        // Auto-refresh the jobs list to update the UI
-        loadMyJobs();
+  // Listen for OTP verification from customer
+  useEffect(() => {
+    const handleOtpVerified = (data: { bookingId: string }) => {
+      console.log("✅ OTP verified event received in mechanic:", data);
+      if (data.bookingId) {
+        // Update the OTP verified map for this specific booking
+        setOtpVerifiedMap((prev) => ({ ...prev, [data.bookingId]: true }));
+
+        // If this is the current active booking, show alert
+        if (data.bookingId === activeBooking?.id) {
+          Alert.alert(
+            "✓ OTP Verified!",
+            "Customer has verified the OTP. You can now complete the service.",
+            [{ text: "OK" }],
+          );
+
+          // Auto-refresh the jobs list to update the UI
+          loadMyJobs();
+        }
       }
-    }
-  };
+    };
 
-  // Use socket.on directly or socketService.on
-  socket.on('otp:verified', handleOtpVerified);
-  // Also try socketService for consistency
-  socketService.on('otp:verified', handleOtpVerified);
+    // Use socket.on directly or socketService.on
+    socket.on("otp:verified", handleOtpVerified);
+    // Also try socketService for consistency
+    socketService.on("otp:verified", handleOtpVerified);
 
-  return () => {
-    socket.off('otp:verified', handleOtpVerified);
-    socketService.off('otp:verified', handleOtpVerified);
-  };
-}, [activeBooking?.id]);
+    return () => {
+      socket.off("otp:verified", handleOtpVerified);
+      socketService.off("otp:verified", handleOtpVerified);
+    };
+  }, [activeBooking?.id]);
   async function rateCustomer(booking: any) {
     setSelectedCompletedBooking(booking);
     setShowRatingModal(true);
@@ -157,11 +190,14 @@ useEffect(() => {
     }
 
     try {
-      await api.post(`/bookings/${selectedCompletedBooking.id}/mechanic-rating`, {
-        rating: customerRating,
-        review: customerReview.trim() || undefined,
-      });
-      
+      await api.post(
+        `/bookings/${selectedCompletedBooking.id}/mechanic-rating`,
+        {
+          rating: customerRating,
+          review: customerReview.trim() || undefined,
+        },
+      );
+
       Alert.alert("Thank You!", "Your feedback has been submitted.");
       setShowRatingModal(false);
       setCustomerRating(0);
@@ -169,54 +205,67 @@ useEffect(() => {
       loadMyJobs();
       fetchTodayEarnings();
     } catch (error: any) {
-      Alert.alert("Error", error.response?.data?.error || "Failed to submit rating");
+      Alert.alert(
+        "Error",
+        error.response?.data?.error || "Failed to submit rating",
+      );
     }
   }
 
-  async function updateStatus(bookingId: string, status: "on_the_way" | "arrived" | "completed") {
+  async function updateStatus(
+    bookingId: string,
+    status: "on_the_way" | "arrived" | "completed",
+  ) {
     try {
       if (status === "completed" && !isOtpVerifiedForCurrentBooking()) {
         Alert.alert(
           "OTP Required",
           "Please wait for the customer to verify the OTP before completing the service.",
-          [{ text: "OK" }]
+          [{ text: "OK" }],
         );
         return;
       }
 
-      const response = await api.patch(`/bookings/${bookingId}/status`, { status });
+      const response = await api.patch(`/bookings/${bookingId}/status`, {
+        status,
+      });
       const updatedBooking = response.data;
-      console.log(`Booking ${bookingId} status updated to ${status}:`, updatedBooking);
+      console.log(
+        `Booking ${bookingId} status updated to ${status}:`,
+        updatedBooking,
+      );
 
       socketService.updateBookingStatus(bookingId, status);
 
       if (status === "arrived") {
         await generateOTPForCompletion(bookingId);
       }
-      
+
       if (status === "completed") {
-        const completedJob = myJobs.find(job => job.id === bookingId);
+        const completedJob = myJobs.find((job) => job.id === bookingId);
         if (completedJob) {
           socketService.completeBooking(
             bookingId,
             completedJob.customer_id,
             user?.id,
             user?.full_name,
-            completedJob.customer?.full_name
+            completedJob.customer?.full_name,
           );
         }
         await fetchTodayEarnings();
         setShowOTPModal(false);
         setGeneratedOTP("");
         // Clear OTP verification for this booking
-        setOtpVerifiedMap(prev => ({ ...prev, [bookingId]: false }));
+        setOtpVerifiedMap((prev) => ({ ...prev, [bookingId]: false }));
       }
 
       Alert.alert("Updated", `Booking marked as ${status.replace("_", " ")}.`);
       await loadMyJobs();
-      
+
       if (status === "completed" || status === "arrived") {
-        const active = myJobs.find(job => job.id === bookingId && job.status !== "completed");
+        const active = myJobs.find(
+          (job) => job.id === bookingId && job.status !== "completed",
+        );
         setActiveBooking(active || null);
       }
     } catch (error) {
@@ -232,19 +281,19 @@ useEffect(() => {
 
   const renderStars = (rating: number | null | undefined) => {
     if (!rating) return null;
-    
+
     const stars = [];
     for (let i = 1; i <= 5; i++) {
       stars.push(
-        <Ionicons 
-          key={i} 
-          name={i <= rating ? "star" : "star-outline"} 
-          size={14} 
-          color="#FBBF24" 
-        />
+        <Ionicons
+          key={i}
+          name={i <= rating ? "star" : "star-outline"}
+          size={14}
+          color="#FBBF24"
+        />,
       );
     }
-    return <View style={{ flexDirection: 'row', gap: 2 }}>{stars}</View>;
+    return <View style={{ flexDirection: "row", gap: 2 }}>{stars}</View>;
   };
 
   const sendLocationUpdate = async (bookingId: string) => {
@@ -255,20 +304,30 @@ useEffect(() => {
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
-      
+
       const newLocation = {
         lat: location.coords.latitude,
         lng: location.coords.longitude,
       };
-      
+
       setCurrentLocation(newLocation);
-      
-      const activeJob = myJobs.find(job => job.id === bookingId);
-      
+
+      const activeJob = myJobs.find((job) => job.id === bookingId);
+
       if (activeJob && activeJob.customer_lat && activeJob.customer_lng) {
-        const eta = calculateETA(newLocation.lat, newLocation.lng, activeJob.customer_lat, activeJob.customer_lng);
-        
-        socketService.sendMechanicLocation(bookingId, newLocation, eta, user?.id);
+        const eta = calculateETA(
+          newLocation.lat,
+          newLocation.lng,
+          activeJob.customer_lat,
+          activeJob.customer_lng,
+        );
+
+        socketService.sendMechanicLocation(
+          bookingId,
+          newLocation,
+          eta,
+          user?.id,
+        );
         await api.patch(`/mechanics/${user?.id}/location`, newLocation);
       }
     } catch (error) {
@@ -277,20 +336,23 @@ useEffect(() => {
   };
 
   useEffect(() => {
-    const activeJob = myJobs.find(job => 
-      job.status === 'accepted' || job.status === 'on_the_way' || job.status === 'arrived'
+    const activeJob = myJobs.find(
+      (job) =>
+        job.status === "accepted" ||
+        job.status === "on_the_way" ||
+        job.status === "arrived",
     );
-    
+
     setActiveBooking(activeJob);
-    
+
     if (activeJob && online) {
       console.log("Starting location tracking for active job:", activeJob.id);
       sendLocationUpdate(activeJob.id);
-      
+
       const interval = setInterval(() => {
         sendLocationUpdate(activeJob.id);
       }, 5000);
-      
+
       return () => {
         console.log("Cleaning up location tracking interval");
         clearInterval(interval);
@@ -307,13 +369,13 @@ useEffect(() => {
 
     socket.on("booking:new", (booking: any) => {
       console.log("New booking available:", booking);
-      
-      if (booking.auto_cancelled || booking.status === 'cancelled') {
+
+      if (booking.auto_cancelled || booking.status === "cancelled") {
         console.log("Booking was auto-cancelled:", booking);
         loadOpenJobs();
         return;
       }
-      
+
       Alert.alert(
         "New Service Request!",
         `A customer needs ${booking.service?.name || "assistance"}. Tap to view details.`,
@@ -343,7 +405,7 @@ useEffect(() => {
           loadOpenJobs();
         }
       }, 10000);
-      
+
       return () => clearInterval(refreshInterval);
     }
   }, [online, activeTab]);
@@ -389,6 +451,122 @@ useEffect(() => {
     }
   }
 
+  const openGoogleMapsNavigation = async (
+    customerLat: number,
+    customerLng: number,
+    customerAddress: string,
+  ) => {
+    try {
+      // Get current location
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission Denied",
+          "Please enable location permissions to use navigation.",
+        );
+        return;
+      }
+
+      const currentLoc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      const originLat = currentLoc.coords.latitude;
+      const originLng = currentLoc.coords.longitude;
+
+      // Create Google Maps URL
+      const url = Platform.select({
+        ios: `maps://maps.apple.com/?daddr=${customerLat},${customerLng}&dirflg=d`,
+        android: `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLng}&destination=${customerLat},${customerLng}&travelmode=driving`,
+      });
+
+      const fallbackUrl = `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLng}&destination=${customerLat},${customerLng}&travelmode=driving`;
+
+      const finalUrl = url || fallbackUrl;
+
+      const canOpen = await Linking.canOpenURL(finalUrl);
+
+      if (canOpen) {
+        await Linking.openURL(finalUrl);
+      } else {
+        // Fallback to web URL
+        await Linking.openURL(fallbackUrl);
+      }
+    } catch (error) {
+      console.error("Failed to open maps:", error);
+      Alert.alert("Error", "Could not open maps. Please try again.");
+    }
+  };
+
+  // Alternative: Open Waze
+  const openWazeNavigation = async (
+    customerLat: number,
+    customerLng: number,
+  ) => {
+    try {
+      const url = `https://waze.com/ul?ll=${customerLat},${customerLng}&navigate=yes`;
+      const canOpen = await Linking.canOpenURL(url);
+
+      if (canOpen) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert(
+          "Waze Not Found",
+          "Please install Waze from the app store.",
+        );
+      }
+    } catch (error) {
+      console.error("Failed to open Waze:", error);
+    }
+  };
+
+  // Show navigation options modal
+  const showNavigationOptions = (job: any) => {
+    Alert.alert(
+      "Navigate to Customer",
+      `Choose navigation app for: ${job.customer?.full_name || "Customer"}`,
+      [
+        {
+          text: "Google Maps",
+          onPress: () =>
+            openGoogleMapsNavigation(
+              job.customer_lat,
+              job.customer_lng,
+              job.customer_address,
+            ),
+        },
+        {
+          text: "Apple Maps",
+          onPress: () => {
+            if (Platform.OS === "ios") {
+              openGoogleMapsNavigation(
+                job.customer_lat,
+                job.customer_lng,
+                job.customer_address,
+              );
+            } else {
+              Alert.alert(
+                "Not Available",
+                "Apple Maps is only available on iOS.",
+              );
+            }
+          },
+        },
+        {
+          text: "View Address",
+          onPress: () => {
+            Alert.alert(
+              "Customer Address",
+              job.customer_address || "Address not provided",
+            );
+          },
+        },
+        { text: "Cancel", style: "cancel" },
+      ],
+      { cancelable: true },
+    );
+  };
+
   async function loadAvailability() {
     try {
       const { data } = await api.get(`/mechanics/${user?.id}/availability`);
@@ -405,7 +583,10 @@ useEffect(() => {
       try {
         const permission = await Location.requestForegroundPermissionsAsync();
         if (permission.status !== "granted") {
-          Alert.alert("Location Required", "Please enable location permissions to go online.");
+          Alert.alert(
+            "Location Required",
+            "Please enable location permissions to go online.",
+          );
           return;
         }
 
@@ -425,7 +606,10 @@ useEffect(() => {
         });
 
         setOnline(nextState);
-        Alert.alert("Status Updated", `You are now online and will receive booking requests.`);
+        Alert.alert(
+          "Status Updated",
+          `You are now online and will receive booking requests.`,
+        );
       } catch (error) {
         console.error("Failed to get location:", error);
         Alert.alert("Error", "Unable to get your current location.");
@@ -462,15 +646,22 @@ useEffect(() => {
         status: "accepted",
       });
 
-      socketService.acceptBooking(selectedBooking.id, {
-        id: user?.id,
-        full_name: user?.full_name,
-        phone: user?.phone,
-      }, 15);
+      socketService.acceptBooking(
+        selectedBooking.id,
+        {
+          id: user?.id,
+          full_name: user?.full_name,
+          phone: user?.phone,
+        },
+        15,
+      );
 
       socketService.joinBookingRoom(selectedBooking.id);
 
-      Alert.alert("✓ Accepted!", "You have accepted the job. Navigate to the customer's location now.");
+      Alert.alert(
+        "✓ Accepted!",
+        "You have accepted the job. Navigate to the customer's location now.",
+      );
 
       setShowAcceptModal(false);
       await Promise.all([loadOpenJobs(), loadMyJobs()]);
@@ -503,55 +694,99 @@ useEffect(() => {
     const hasCustomerRating = item.customer_rating;
     const hasMechanicRating = item.mechanic_rating;
     const isOtpVerified = otpVerifiedMap[item.id] || false;
-    
+
     return (
       <View style={styles.card}>
+        {/* Card Header */}
         <View style={styles.cardHeader}>
-          <Text style={styles.cardTitle}>Service Request #{item.id.slice(0, 8)}</Text>
-          <View style={[
-            styles.statusBadge,
-            item.status === 'completed' && styles.completedBadge,
-            item.status === 'cancelled' && styles.cancelledBadge,
-            item.status === 'accepted' && styles.acceptedBadge,
-            item.status === 'on_the_way' && styles.onWayBadge,
-            item.status === 'arrived' && styles.arrivedBadge,
-          ]}>
+          <Text style={styles.cardTitle}>
+            Service Request #{item.id.slice(0, 8)}
+          </Text>
+          <View
+            style={[
+              styles.statusBadge,
+              item.status === "completed" && styles.completedBadge,
+              item.status === "cancelled" && styles.cancelledBadge,
+              item.status === "accepted" && styles.acceptedBadge,
+              item.status === "on_the_way" && styles.onWayBadge,
+              item.status === "arrived" && styles.arrivedBadge,
+            ]}
+          >
             <Text style={styles.statusBadgeText}>
               {item.status?.replaceAll("_", " ").toUpperCase()}
             </Text>
           </View>
         </View>
 
-        <Text style={styles.cardMeta}>Issue: {item.issue_note || "Road assistance needed"}</Text>
-        
+        <Text style={styles.cardMeta}>
+          Issue: {item.issue_note || "Road assistance needed"}
+        </Text>
+
         {item.customer && (
-          <Text style={styles.cardMeta}>Customer: {item.customer.full_name}</Text>
+          <Text style={styles.cardMeta}>
+            Customer: {item.customer.full_name}
+          </Text>
         )}
-        
+
         {item.customer_address && (
           <Text style={styles.cardMeta}>📍 {item.customer_address}</Text>
         )}
-        
+
         {item.customer_lat && item.customer_lng && currentLocation && (
           <Text style={styles.distanceText}>
-            📍 Distance: {calculateDistance(
+            📍 Distance:{" "}
+            {calculateDistance(
               currentLocation.lat,
               currentLocation.lng,
               item.customer_lat,
               item.customer_lng,
-            ).toFixed(1)} km away
+            ).toFixed(1)}{" "}
+            km away
           </Text>
         )}
 
-        {(item.status === 'completed' || hasCustomerRating || hasMechanicRating) && (
-          <TouchableOpacity 
+        {/* Location Navigation Card for Active Jobs */}
+        {isMyJob &&
+          (item.status === "accepted" || item.status === "on_the_way") &&
+          item.customer_lat &&
+          item.customer_lng && (
+            <TouchableOpacity
+              style={styles.locationCard}
+              onPress={() => showNavigationOptions(item)}
+            >
+              <View style={styles.locationCardLeft}>
+                <View style={styles.locationIconContainer}>
+                  <Ionicons name="location" size={20} color="#EF4444" />
+                </View>
+                <View>
+                  <Text style={styles.locationCardTitle}>
+                    Navigate to Customer
+                  </Text>
+                  <Text style={styles.locationCardAddress} numberOfLines={1}>
+                    {item.customer_address || "Tap to open maps"}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.locationCardRight}>
+                <Text style={styles.navigateText}>Navigate →</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+        {/* Ratings Summary */}
+        {(item.status === "completed" ||
+          hasCustomerRating ||
+          hasMechanicRating) && (
+          <TouchableOpacity
             style={styles.ratingSummary}
             onPress={() => viewRatingsDetails(item)}
           >
             <View style={styles.ratingSummaryLeft}>
               <Ionicons name="star" size={16} color="#FBBF24" />
               <Text style={styles.ratingSummaryText}>
-                {hasCustomerRating ? `${item.customer_rating?.toFixed(1)} ★` : 'Rate Customer'}
+                {hasCustomerRating
+                  ? `${item.customer_rating?.toFixed(1)} ★`
+                  : "Rate Customer"}
               </Text>
             </View>
             <View style={styles.ratingSummaryRight}>
@@ -568,60 +803,98 @@ useEffect(() => {
           </TouchableOpacity>
         )}
 
+        {/* Accept Button for Available Jobs */}
         {!isMyJob && item.status === "requested" && (
-          <TouchableOpacity style={styles.acceptButton} onPress={() => acceptJob(item)}>
+          <TouchableOpacity
+            style={styles.acceptButton}
+            onPress={() => acceptJob(item)}
+          >
             <Text style={styles.acceptButtonText}>Accept Job</Text>
           </TouchableOpacity>
         )}
 
-        {isMyJob && item.status !== "completed" && item.status !== "cancelled" && (
-          <View style={styles.row}>
-            {item.status === "accepted" && (
-              <TouchableOpacity
-                style={[styles.smallBtn, styles.primaryBtn]}
-                onPress={() => updateStatus(item.id, "on_the_way")}
-              >
-                <Text style={styles.smallBtnText}>Start Journey</Text>
-              </TouchableOpacity>
-            )}
-            {item.status === "on_the_way" && (
-              <TouchableOpacity
-                style={[styles.smallBtn, styles.primaryBtn]}
-                onPress={() => updateStatus(item.id, "arrived")}
-              >
-                <Text style={styles.smallBtnText}>Arrived</Text>
-              </TouchableOpacity>
-            )}
-            {item.status === "arrived" && (
-              <>
-                <TouchableOpacity
-                  style={[styles.smallBtn, styles.otpBtn]}
-                  onPress={() => generateOTPForCompletion(item.id)}
-                >
-                  <Ionicons name="key-outline" size={16} color="#FFF" />
-                  <Text style={[styles.smallBtnText, { color: "#FFF" }]}>Show OTP</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.smallBtn, 
-                    styles.completeBtn, 
-                    !isOtpVerified && styles.disabledButton
-                  ]}
-                  onPress={() => updateStatus(item.id, "completed")}
-                  disabled={!isOtpVerified}
-                >
-                  <Text style={[styles.smallBtnText, { color: "#FFF" }]}>
-                    {isOtpVerified ? "Complete" : "Waiting for OTP..."}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        )}
+        {/* Action Buttons for My Jobs */}
+        {isMyJob &&
+          item.status !== "completed" &&
+          item.status !== "cancelled" && (
+            <View style={styles.row}>
+              {item.status === "accepted" && (
+                <>
+                  <TouchableOpacity
+                    style={[styles.smallBtn, styles.primaryBtn]}
+                    onPress={() => {
+                      updateStatus(item.id, "on_the_way");
+                      setTimeout(() => {
+                        showNavigationOptions(item);
+                      }, 500);
+                    }}
+                  >
+                    <Ionicons name="car-outline" size={16} color="#FFF" />
+                    <Text style={styles.smallBtnText}>Start & Navigate</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.smallBtn, styles.navigateBtn]}
+                    onPress={() => showNavigationOptions(item)}
+                  >
+                    <Ionicons name="navigate-outline" size={16} color="#FFF" />
+                    <Text style={styles.smallBtnText}>Navigate</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+              {item.status === "on_the_way" && (
+                <>
+                  <TouchableOpacity
+                    style={[styles.smallBtn, styles.primaryBtn]}
+                    onPress={() => updateStatus(item.id, "arrived")}
+                  >
+                    <Ionicons name="flag-outline" size={16} color="#FFF" />
+                    <Text style={styles.smallBtnText}>Arrived</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.smallBtn, styles.navigateBtn]}
+                    onPress={() => showNavigationOptions(item)}
+                  >
+                    <Ionicons name="navigate-outline" size={16} color="#FFF" />
+                    <Text style={styles.smallBtnText}>Navigate</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+              {item.status === "arrived" && (
+                <>
+                  <TouchableOpacity
+                    style={[styles.smallBtn, styles.otpBtn]}
+                    onPress={() => generateOTPForCompletion(item.id)}
+                  >
+                    <Ionicons name="key-outline" size={16} color="#FFF" />
+                    <Text style={[styles.smallBtnText, { color: "#FFF" }]}>
+                      Show OTP
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.smallBtn,
+                      styles.completeBtn,
+                      !isOtpVerified && styles.disabledButton,
+                    ]}
+                    onPress={() => updateStatus(item.id, "completed")}
+                    disabled={!isOtpVerified}
+                  >
+                    <Text style={[styles.smallBtnText, { color: "#FFF" }]}>
+                      {isOtpVerified ? "Complete" : "Waiting for OTP..."}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          )}
 
+        {/* Rate Customer Button */}
         {isMyJob && item.status === "completed" && !item.mechanic_rating && (
           <TouchableOpacity
-            style={[styles.acceptButton, { backgroundColor: "#8B5CF6", marginTop: 12 }]}
+            style={[
+              styles.acceptButton,
+              { backgroundColor: "#8B5CF6", marginTop: 12 },
+            ]}
             onPress={() => rateCustomer(item)}
           >
             <Ionicons name="star-outline" size={18} color="#FFF" />
@@ -656,13 +929,15 @@ useEffect(() => {
             {selectedBooking && (
               <View style={styles.modalDetails}>
                 <Text style={styles.modalDetailText}>
-                  Service: {selectedBooking.service?.name || "Roadside Assistance"}
+                  Service:{" "}
+                  {selectedBooking.service?.name || "Roadside Assistance"}
                 </Text>
                 <Text style={styles.modalDetailText}>
                   Issue: {selectedBooking.issue_note || "Not specified"}
                 </Text>
                 <Text style={styles.modalDetailText}>
-                  Location: {selectedBooking.customer_address || "Address provided"}
+                  Location:{" "}
+                  {selectedBooking.customer_address || "Address provided"}
                 </Text>
               </View>
             )}
@@ -700,8 +975,15 @@ useEffect(() => {
               Share this OTP with the customer to complete the service
             </Text>
             <Text style={styles.otpExpiry}>Valid for 10 minutes</Text>
-            <Text style={[styles.otpStatus, isOtpVerifiedForCurrentBooking() && styles.otpVerified]}>
-              {isOtpVerifiedForCurrentBooking() ? "✓ OTP Verified" : "⏳ Waiting for customer verification..."}
+            <Text
+              style={[
+                styles.otpStatus,
+                isOtpVerifiedForCurrentBooking() && styles.otpVerified,
+              ]}
+            >
+              {isOtpVerifiedForCurrentBooking()
+                ? "✓ OTP Verified"
+                : "⏳ Waiting for customer verification..."}
             </Text>
             <TouchableOpacity
               style={styles.modalCloseButton}
@@ -721,7 +1003,7 @@ useEffect(() => {
             <Text style={styles.modalText}>
               How was your experience with this customer?
             </Text>
-            
+
             <View style={styles.ratingContainer}>
               {[1, 2, 3, 4, 5].map((star) => (
                 <TouchableOpacity
@@ -737,7 +1019,7 @@ useEffect(() => {
                 </TouchableOpacity>
               ))}
             </View>
-            
+
             <TextInput
               style={styles.reviewInput}
               placeholder="Share your experience (optional)"
@@ -747,7 +1029,7 @@ useEffect(() => {
               numberOfLines={3}
               textAlignVertical="top"
             />
-            
+
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalCancelButton]}
@@ -774,10 +1056,14 @@ useEffect(() => {
       <Modal visible={showRatingsDetailModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <ScrollView contentContainerStyle={styles.modalScrollContent}>
-            <View style={[styles.modalContent, { width: "90%", maxWidth: 500 }]}>
+            <View
+              style={[styles.modalContent, { width: "90%", maxWidth: 500 }]}
+            >
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Ratings & Reviews</Text>
-                <TouchableOpacity onPress={() => setShowRatingsDetailModal(false)}>
+                <TouchableOpacity
+                  onPress={() => setShowRatingsDetailModal(false)}
+                >
                   <Ionicons name="close" size={24} color="#64748B" />
                 </TouchableOpacity>
               </View>
@@ -789,31 +1075,47 @@ useEffect(() => {
                       Booking #{selectedRatingsBooking.id.slice(0, 8)}
                     </Text>
                     <Text style={styles.bookingInfoDate}>
-                      {new Date(selectedRatingsBooking.created_at).toLocaleDateString()}
+                      {new Date(
+                        selectedRatingsBooking.created_at,
+                      ).toLocaleDateString()}
                     </Text>
                   </View>
 
                   <View style={styles.ratingSection}>
                     <View style={styles.ratingHeader}>
                       <View style={styles.ratingTitleContainer}>
-                        <Ionicons name="person-outline" size={20} color="#0F172A" />
-                        <Text style={styles.ratingTitle}>Customer's Rating</Text>
+                        <Ionicons
+                          name="person-outline"
+                          size={20}
+                          color="#0F172A"
+                        />
+                        <Text style={styles.ratingTitle}>
+                          Customer's Rating
+                        </Text>
                       </View>
                       <Text style={styles.ratingRoleBadge}>Of You</Text>
                     </View>
-                    
+
                     <View style={styles.ratingContent}>
                       {selectedRatingsBooking.customer_rating ? (
                         <>
                           <View style={styles.ratingStarsLarge}>
-                            {renderStars(selectedRatingsBooking.customer_rating)}
+                            {renderStars(
+                              selectedRatingsBooking.customer_rating,
+                            )}
                             <Text style={styles.ratingText}>
-                              ({selectedRatingsBooking.customer_rating.toFixed(1)})
+                              (
+                              {selectedRatingsBooking.customer_rating.toFixed(
+                                1,
+                              )}
+                              )
                             </Text>
                           </View>
                           {selectedRatingsBooking.customer_review && (
                             <View style={styles.reviewContainer}>
-                              <Text style={styles.reviewLabel}>Customer's Review:</Text>
+                              <Text style={styles.reviewLabel}>
+                                Customer's Review:
+                              </Text>
                               <Text style={styles.reviewText}>
                                 "{selectedRatingsBooking.customer_review}"
                               </Text>
@@ -822,7 +1124,11 @@ useEffect(() => {
                         </>
                       ) : (
                         <View style={styles.noRatingContainer}>
-                          <Ionicons name="star-outline" size={32} color="#CBD5E1" />
+                          <Ionicons
+                            name="star-outline"
+                            size={32}
+                            color="#CBD5E1"
+                          />
                           <Text style={styles.noRatingText}>No rating yet</Text>
                         </View>
                       )}
@@ -832,24 +1138,40 @@ useEffect(() => {
                   <View style={styles.ratingSection}>
                     <View style={styles.ratingHeader}>
                       <View style={styles.ratingTitleContainer}>
-                        <Ionicons name="construct-outline" size={20} color="#0F172A" />
+                        <Ionicons
+                          name="construct-outline"
+                          size={20}
+                          color="#0F172A"
+                        />
                         <Text style={styles.ratingTitle}>Your Rating</Text>
                       </View>
-                      <Text style={[styles.ratingRoleBadge, styles.mechanicBadge]}>Of Customer</Text>
+                      <Text
+                        style={[styles.ratingRoleBadge, styles.mechanicBadge]}
+                      >
+                        Of Customer
+                      </Text>
                     </View>
-                    
+
                     <View style={styles.ratingContent}>
                       {selectedRatingsBooking.mechanic_rating ? (
                         <>
                           <View style={styles.ratingStarsLarge}>
-                            {renderStars(selectedRatingsBooking.mechanic_rating)}
+                            {renderStars(
+                              selectedRatingsBooking.mechanic_rating,
+                            )}
                             <Text style={styles.ratingText}>
-                              ({selectedRatingsBooking.mechanic_rating.toFixed(1)})
+                              (
+                              {selectedRatingsBooking.mechanic_rating.toFixed(
+                                1,
+                              )}
+                              )
                             </Text>
                           </View>
                           {selectedRatingsBooking.mechanic_review && (
                             <View style={styles.reviewContainer}>
-                              <Text style={styles.reviewLabel}>Your Review:</Text>
+                              <Text style={styles.reviewLabel}>
+                                Your Review:
+                              </Text>
                               <Text style={styles.reviewText}>
                                 "{selectedRatingsBooking.mechanic_review}"
                               </Text>
@@ -858,8 +1180,14 @@ useEffect(() => {
                         </>
                       ) : (
                         <View style={styles.noRatingContainer}>
-                          <Ionicons name="time-outline" size={32} color="#CBD5E1" />
-                          <Text style={styles.noRatingText}>You haven't rated yet</Text>
+                          <Ionicons
+                            name="time-outline"
+                            size={32}
+                            color="#CBD5E1"
+                          />
+                          <Text style={styles.noRatingText}>
+                            You haven't rated yet
+                          </Text>
                         </View>
                       )}
                     </View>
@@ -893,10 +1221,15 @@ useEffect(() => {
           <View>
             <Text style={styles.earningsLabel}>Today's Earnings</Text>
             <Text style={styles.earningsAmount}>₹{todayEarnings}</Text>
-            <Text style={styles.earningsSubtext}>{todaysJobsCount} jobs completed</Text>
+            <Text style={styles.earningsSubtext}>
+              {todaysJobsCount} jobs completed
+            </Text>
           </View>
         </View>
-        <TouchableOpacity onPress={fetchTodayEarnings} style={styles.refreshEarnings}>
+        <TouchableOpacity
+          onPress={fetchTodayEarnings}
+          style={styles.refreshEarnings}
+        >
           <Ionicons name="refresh-outline" size={20} color="#64748B" />
         </TouchableOpacity>
       </View>
@@ -904,7 +1237,10 @@ useEffect(() => {
       {/* Status Bar */}
       <View style={styles.statusBar}>
         <TouchableOpacity
-          style={[styles.statusButton, online ? styles.onlineBtn : styles.offlineBtn]}
+          style={[
+            styles.statusButton,
+            online ? styles.onlineBtn : styles.offlineBtn,
+          ]}
           onPress={toggleAvailability}
         >
           <View style={styles.statusDot} />
@@ -926,7 +1262,12 @@ useEffect(() => {
           style={[styles.tab, activeTab === "available" && styles.activeTab]}
           onPress={() => setActiveTab("available")}
         >
-          <Text style={[styles.tabText, activeTab === "available" && styles.activeTabText]}>
+          <Text
+            style={[
+              styles.tabText,
+              activeTab === "available" && styles.activeTabText,
+            ]}
+          >
             Available ({jobs.length})
           </Text>
         </TouchableOpacity>
@@ -934,7 +1275,12 @@ useEffect(() => {
           style={[styles.tab, activeTab === "myJobs" && styles.activeTab]}
           onPress={() => setActiveTab("myJobs")}
         >
-          <Text style={[styles.tabText, activeTab === "myJobs" && styles.activeTabText]}>
+          <Text
+            style={[
+              styles.tabText,
+              activeTab === "myJobs" && styles.activeTabText,
+            ]}
+          >
             My Jobs ({myJobs.length})
           </Text>
         </TouchableOpacity>
@@ -979,7 +1325,7 @@ const styles = StyleSheet.create({
   centerContent: { flex: 1, justifyContent: "center", alignItems: "center" },
   loadingText: { marginTop: 12, fontSize: 14, color: "#64748B" },
   content: { padding: 16, paddingBottom: 32 },
-  
+
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -992,7 +1338,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 22, fontWeight: "800", color: "#0F172A" },
   logoutButton: { padding: 8 },
-  
+
   earningsCard: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1014,7 +1360,7 @@ const styles = StyleSheet.create({
   earningsAmount: { fontSize: 24, fontWeight: "800", color: "#0F172A" },
   earningsSubtext: { fontSize: 11, color: "#94A3B8", marginTop: 2 },
   refreshEarnings: { padding: 8 },
-  
+
   statusBar: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1050,7 +1396,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
   },
   locationText: { fontSize: 12, color: "#10B981", fontWeight: "500" },
-  
+
   tabBar: {
     flexDirection: "row",
     paddingHorizontal: 20,
@@ -1063,7 +1409,7 @@ const styles = StyleSheet.create({
   activeTab: { borderBottomWidth: 2, borderBottomColor: "#0F172A" },
   tabText: { fontSize: 14, fontWeight: "600", color: "#64748B" },
   activeTabText: { color: "#0F172A" },
-  
+
   card: {
     backgroundColor: "#FFF",
     borderRadius: 16,
@@ -1094,10 +1440,15 @@ const styles = StyleSheet.create({
   onWayBadge: { backgroundColor: "#FEF3C7" },
   arrivedBadge: { backgroundColor: "#EDE9FE" },
   statusBadgeText: { fontSize: 10, fontWeight: "700", color: "#0F172A" },
-  
+
   cardMeta: { fontSize: 13, color: "#475569", marginTop: 6 },
-  distanceText: { fontSize: 12, color: "#10B981", marginTop: 6, fontWeight: "500" },
-  
+  distanceText: {
+    fontSize: 12,
+    color: "#10B981",
+    marginTop: 6,
+    fontWeight: "500",
+  },
+
   ratingSummary: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1123,7 +1474,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   mechanicRatingText: { fontSize: 11, fontWeight: "600", color: "#10B981" },
-  
+
   acceptButton: {
     backgroundColor: "#0F172A",
     padding: 14,
@@ -1135,7 +1486,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   acceptButtonText: { color: "#FFF", fontWeight: "700", textAlign: "center" },
-  
+
   row: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
   smallBtn: {
     flex: 1,
@@ -1152,11 +1503,21 @@ const styles = StyleSheet.create({
   completeBtn: { backgroundColor: "#8B5CF6" },
   disabledButton: { opacity: 0.5, backgroundColor: "#94A3B8" },
   smallBtnText: { fontWeight: "700", fontSize: 12, color: "#FFF" },
-  
+
   emptyState: { padding: 48, alignItems: "center" },
-  emptyStateText: { fontSize: 16, fontWeight: "600", color: "#64748B", marginTop: 12 },
-  emptyStateSubtext: { fontSize: 14, color: "#94A3B8", textAlign: "center", marginTop: 8 },
-  
+  emptyStateText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#64748B",
+    marginTop: 12,
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    color: "#94A3B8",
+    textAlign: "center",
+    marginTop: 8,
+  },
+
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
@@ -1184,8 +1545,19 @@ const styles = StyleSheet.create({
     borderBottomColor: "#E2E8F0",
     marginBottom: 16,
   },
-  modalTitle: { fontSize: 20, fontWeight: "700", color: "#0F172A", marginBottom: 8, textAlign: "center" },
-  modalText: { fontSize: 14, color: "#475569", marginBottom: 16, textAlign: "center" },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#0F172A",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  modalText: {
+    fontSize: 14,
+    color: "#475569",
+    marginBottom: 16,
+    textAlign: "center",
+  },
   modalDetails: {
     backgroundColor: "#F1F5F9",
     padding: 12,
@@ -1194,12 +1566,17 @@ const styles = StyleSheet.create({
   },
   modalDetailText: { fontSize: 13, color: "#0F172A", marginBottom: 4 },
   modalButtons: { flexDirection: "row", gap: 12 },
-  modalButton: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: "center" },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: "center",
+  },
   modalCancelButton: { backgroundColor: "#F1F5F9" },
   modalCancelText: { color: "#64748B", fontWeight: "600" },
   modalAcceptButton: { backgroundColor: "#0F172A" },
   modalAcceptText: { color: "#FFF", fontWeight: "600" },
-  
+
   otpHeader: { alignItems: "center", marginBottom: 16 },
   otpDisplayText: {
     fontSize: 48,
@@ -1209,14 +1586,39 @@ const styles = StyleSheet.create({
     color: "#0F172A",
     marginVertical: 20,
   },
-  otpInstruction: { fontSize: 14, color: "#64748B", textAlign: "center", marginBottom: 8 },
-  otpExpiry: { fontSize: 12, color: "#EF4444", textAlign: "center", marginBottom: 20 },
-  otpStatus: { fontSize: 14, fontWeight: "600", color: "#F59E0B", textAlign: "center", marginBottom: 16 },
+  otpInstruction: {
+    fontSize: 14,
+    color: "#64748B",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  otpExpiry: {
+    fontSize: 12,
+    color: "#EF4444",
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  otpStatus: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#F59E0B",
+    textAlign: "center",
+    marginBottom: 16,
+  },
   otpVerified: { color: "#10B981" },
-  modalCloseButton: { backgroundColor: "#0F172A", padding: 12, borderRadius: 8, alignItems: "center" },
+  modalCloseButton: {
+    backgroundColor: "#0F172A",
+    padding: 12,
+    borderRadius: 8,
+    alignItems: "center",
+  },
   modalCloseText: { color: "#FFF", fontWeight: "600" },
-  
-  ratingContainer: { flexDirection: "row", justifyContent: "center", marginVertical: 20 },
+
+  ratingContainer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    marginVertical: 20,
+  },
   starButton: { padding: 8 },
   reviewInput: {
     backgroundColor: "#F1F5F9",
@@ -1226,12 +1628,23 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     fontSize: 14,
   },
-  
+
   ratingsBody: { paddingBottom: 16 },
-  bookingInfo: { backgroundColor: "#F1F5F9", padding: 12, borderRadius: 12, marginBottom: 20 },
+  bookingInfo: {
+    backgroundColor: "#F1F5F9",
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 20,
+  },
   bookingInfoText: { fontSize: 14, fontWeight: "600", color: "#0F172A" },
   bookingInfoDate: { fontSize: 12, color: "#64748B", marginTop: 4 },
-  ratingSection: { marginBottom: 20, borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 12, overflow: "hidden" },
+  ratingSection: {
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 12,
+    overflow: "hidden",
+  },
   ratingHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1255,13 +1668,90 @@ const styles = StyleSheet.create({
   },
   mechanicBadge: { backgroundColor: "#F0FDF4", color: "#10B981" },
   ratingContent: { padding: 16 },
-  ratingStarsLarge: { flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 12 },
-  ratingText: { fontSize: 14, fontWeight: "600", color: "#0F172A", marginLeft: 4 },
-  reviewContainer: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: "#E2E8F0" },
-  reviewLabel: { fontSize: 12, fontWeight: "600", color: "#64748B", marginBottom: 8 },
-  reviewText: { fontSize: 14, color: "#0F172A", lineHeight: 20, fontStyle: "italic" },
+  ratingStarsLarge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginBottom: 12,
+  },
+  ratingText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0F172A",
+    marginLeft: 4,
+  },
+  reviewContainer: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+  },
+  reviewLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#64748B",
+    marginBottom: 8,
+  },
+  reviewText: {
+    fontSize: 14,
+    color: "#0F172A",
+    lineHeight: 20,
+    fontStyle: "italic",
+  },
   noRatingContainer: { alignItems: "center", paddingVertical: 20 },
   noRatingText: { fontSize: 13, color: "#94A3B8", marginTop: 8 },
-  closeRatingsButton: { marginTop: 20, backgroundColor: "#0F172A", padding: 14, borderRadius: 12, alignItems: "center" },
+  closeRatingsButton: {
+    marginTop: 20,
+    backgroundColor: "#0F172A",
+    padding: 14,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  navigateBtn: {
+    backgroundColor: "#3B82F6",
+  },
+  locationCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#F8FAFC",
+    padding: 12,
+    marginTop: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  locationCardLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    flex: 1,
+  },
+  locationIconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#FEE2E2",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  locationCardTitle: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#0F172A",
+  },
+  locationCardAddress: {
+    fontSize: 11,
+    color: "#64748B",
+    marginTop: 2,
+  },
+  locationCardRight: {
+    paddingLeft: 8,
+  },
+  navigateText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#3B82F6",
+  },
   closeRatingsButtonText: { color: "#FFF", fontSize: 16, fontWeight: "600" },
 });

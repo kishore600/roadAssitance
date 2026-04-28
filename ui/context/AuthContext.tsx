@@ -37,22 +37,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     checkSession();
-  }, []);
+  }, []); // Only run once on mount
 
   async function checkSession() {
     try {
-      // Check for stored token and user data
+      // Check for stored token and user data in SecureStore
       const token = await SecureStore.getItemAsync('auth_token');
       const userData = await SecureStore.getItemAsync('user_data');
+      
+      console.log('Token exists:', !!token);
       
       if (token && userData) {
         const parsedUser = JSON.parse(userData);
         setUser(parsedUser);
         
         // Set token in API client for subsequent requests
-        await api.setToken(token);
+        api.setToken(token);
         
-        console.log('Session restored from cookies');
+        console.log('Session restored successfully');
       }
     } catch (error) {
       console.error('Session check failed:', error);
@@ -65,7 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function clearSession() {
     await SecureStore.deleteItemAsync('auth_token');
     await SecureStore.deleteItemAsync('user_data');
-    await api.clearToken();
+    api.clearToken();
     setUser(null);
   }
 
@@ -74,13 +76,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data } = await api.post('/auth/login', { email, password });
       
       if (data.success || data.token) {
-        // Store token and user data securely (like cookies)
+        // Store token and user data securely
         await SecureStore.setItemAsync('auth_token', data.token);
         await SecureStore.setItemAsync('user_data', JSON.stringify(data.user));
         
         // Set token in API client for subsequent requests
-        await api.setToken(data.token);
-        await api.setUser(data.user);
+        api.setToken(data.token);
+        api.setUser(data.user);
         setUser(data.user);
         
         // Navigate based on role
@@ -104,19 +106,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function signup(data: SignupData): Promise<boolean> {
     try {
-      const { data: response } = await api.post('/auth/signup', data);
+      const response = await api.post('/auth/signup', data);
       
-      if (response.success || response.token) {
-        // Store token and user data securely (like cookies)
-        await SecureStore.setItemAsync('auth_token', response.token);
-        await SecureStore.setItemAsync('user_data', JSON.stringify(response.user));
+      if (response.data.success || response.data.token) {
+        // Store token and user data securely
+        await SecureStore.setItemAsync('auth_token', response.data.token);
+        await SecureStore.setItemAsync('user_data', JSON.stringify(response.data.user));
         
         // Set token in API client for subsequent requests
-        await api.setToken(response.token);
-        setUser(response.user);
+        api.setToken(response.data.token);
+        setUser(response.data.user);
         
         // Navigate based on role
-        if (response.user.role === 'mechanic') {
+        if (response.data.user.role === 'mechanic') {
           router.replace('/mechanic/dashboard');
         } else {
           router.replace('/(tabs)/customer');
