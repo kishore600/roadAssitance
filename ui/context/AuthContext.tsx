@@ -42,10 +42,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function checkSession() {
     try {
       // Check for stored token and user data in SecureStore
-      const token = await SecureStore.getItemAsync('auth_token');
+      const token = await SecureStore.getItemAsync('token');
       const userData = await SecureStore.getItemAsync('user_data');
       
-      console.log('Token exists:', !!token);
+      console.log('Token exists:', !!token,userData);
       
       if (token && userData) {
         const parsedUser = JSON.parse(userData);
@@ -53,7 +53,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         
         // Set token in API client for subsequent requests
         api.setToken(token);
-        
+        if (parsedUser.role === 'mechanic') {
+          router.replace('/mechanic/dashboard');
+        } else if (parsedUser.role === 'customer') {
+          router.replace('/(tabs)/customer');
+        } else {
+          router.replace('/(auth)/login');
+        }
         console.log('Session restored successfully');
       }
     } catch (error) {
@@ -65,7 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function clearSession() {
-    await SecureStore.deleteItemAsync('auth_token');
+    await SecureStore.deleteItemAsync('token');
     await SecureStore.deleteItemAsync('user_data');
     api.clearToken();
     setUser(null);
@@ -77,7 +83,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       if (data.success || data.token) {
         // Store token and user data securely
-        await SecureStore.setItemAsync('auth_token', data.token);
+        await SecureStore.setItemAsync('token', data.token);
         await SecureStore.setItemAsync('user_data', JSON.stringify(data.user));
         
         // Set token in API client for subsequent requests
@@ -110,7 +116,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       if (response.data.success || response.data.token) {
         // Store token and user data securely
-        await SecureStore.setItemAsync('auth_token', response.data.token);
+        await SecureStore.setItemAsync('token', response.data.token);
         await SecureStore.setItemAsync('user_data', JSON.stringify(response.data.user));
         
         // Set token in API client for subsequent requests

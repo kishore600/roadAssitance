@@ -19,7 +19,7 @@ export default function SignupScreen() {
     
     async function checkExistingSession() {
       try {
-        const token = await SecureStore.getItemAsync('auth_token');
+        const token = await SecureStore.getItemAsync('token');
         const userData = await SecureStore.getItemAsync('user_data');
         console.log('Existing session check:', { token, userData, user });
         if (token && userData && user) {

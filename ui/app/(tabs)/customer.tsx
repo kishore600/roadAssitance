@@ -29,6 +29,9 @@ import { useAuth } from "@/context/AuthContext";
 import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LocationPicker } from "@/components/LocationPicker";
+import { VehicleTypePicker, VehicleType } from "@/components/VehicleTypePicker";
+
+// Add state in component
 
 const { width, height } = Dimensions.get("window");
 const GOOGLE_MAPS_API_KEY = process.env
@@ -113,11 +116,11 @@ export default function CustomerScreen() {
   const [timerInterval, setTimerInterval] = useState<NodeJS.Timeout | null>(
     null,
   );
-const [serviceLocation, setServiceLocation] = useState<{
-  latitude: number;
-  longitude: number;
-  address: string;
-} | null>(null);
+  const [serviceLocation, setServiceLocation] = useState<{
+    latitude: number;
+    longitude: number;
+    address: string;
+  } | null>(null);
   // OTP and Rating States
   const [showOTPModal, setShowOTPModal] = useState(false);
   const [otpCode, setOtpCode] = useState("");
@@ -128,7 +131,11 @@ const [serviceLocation, setServiceLocation] = useState<{
   const [completedBookingId, setCompletedBookingId] = useState<string | null>(
     null,
   );
-
+  const [showVehiclePicker, setShowVehiclePicker] = useState(false);
+  const [selectedVehicle, setSelectedVehicle] = useState<VehicleType | null>(
+    null,
+  );
+  const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
   // Location picker states
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState<{
@@ -169,7 +176,22 @@ const [serviceLocation, setServiceLocation] = useState<{
       }
     }, [user]),
   );
+  async function fetchVehicleTypes() {
+    try {
+      const { data } = await api.get("/bookings/vehicle-types");
+      setVehicleTypes(data.vehicleTypes);
+    } catch (error) {
+      console.error("Failed to fetch vehicle types:", error);
+    }
+  }
 
+  // Load vehicle types on mount
+  useEffect(() => {
+    if (user && !activeBooking) {
+      initializeApp();
+      fetchVehicleTypes(); // Add this line
+    }
+  }, [user]);
   // Replace socket with socketService
   // Instead of: import { socket } from "@/lib/socket";
   // Use: const socket = socketService;
@@ -424,9 +446,7 @@ const [serviceLocation, setServiceLocation] = useState<{
         }
 
         if (updatedBooking.status === "on_the_way") {
-          Alert.alert(
-            "🚗 Mechanic On The Way!",
-          );
+          Alert.alert("🚗 Mechanic On The Way!");
           setCurrentTrackingModal("tracking");
           setIsTracking(true);
           requestMechanicLocationUpdate(); // Request immediate location
@@ -501,64 +521,64 @@ const [serviceLocation, setServiceLocation] = useState<{
     }
   }, [waitingForMechanic, activeBooking]);
 
-async function checkActiveBooking() {
-  try {
-    const { data } = await api.get(`/bookings/customer/${user?.id}`);
-    const active = data.find(
-      (b: Booking) => b.status !== "completed" && b.status !== "cancelled",
-    );
+  async function checkActiveBooking() {
+    try {
+      const { data } = await api.get(`/bookings/customer/${user?.id}`);
+      const active = data.find(
+        (b: Booking) => b.status !== "completed" && b.status !== "cancelled",
+      );
 
-    if (active) {
-      console.log("Active booking found:", active);
-      setActiveBooking(active);
+      if (active) {
+        console.log("Active booking found:", active);
+        setActiveBooking(active);
 
-      // ✅ Store the service location (where the customer requested service)
-      if (active.customer_lat && active.customer_lng) {
-        setServiceLocation({
-          latitude: active.customer_lat,
-          longitude: active.customer_lng,
-          address: active.customer_address || "Service Location",
-        });
-      }
-
-      // Set mechanic name if available
-      if (active.mechanic?.full_name) {
-        setMechanicName(active.mechanic.full_name);
-      }
-
-      if (
-        active.status === "accepted" ||
-        active.status === "on_the_way" ||
-        active.status === "arrived"
-      ) {
-        setIsTracking(true);
-        setCurrentTrackingModal("tracking");
-        startTrackingMechanic(active);
-
-        // Request immediate location update
-        if (active.mechanic_id) {
-          setTimeout(() => {
-            requestMechanicLocationUpdate();
-          }, 1000);
+        // ✅ Store the service location (where the customer requested service)
+        if (active.customer_lat && active.customer_lng) {
+          setServiceLocation({
+            latitude: active.customer_lat,
+            longitude: active.customer_lng,
+            address: active.customer_address || "Service Location",
+          });
         }
 
-        if (active.status === "arrived") {
-          setShowOTPModal(true);
+        // Set mechanic name if available
+        if (active.mechanic?.full_name) {
+          setMechanicName(active.mechanic.full_name);
         }
-      } else if (active.status === "requested") {
-        setWaitingForMechanic(true);
-        setCurrentTrackingModal("waiting");
-        await fetchNearbyMechanicsForMap();
+
+        if (
+          active.status === "accepted" ||
+          active.status === "on_the_way" ||
+          active.status === "arrived"
+        ) {
+          setIsTracking(true);
+          setCurrentTrackingModal("tracking");
+          startTrackingMechanic(active);
+
+          // Request immediate location update
+          if (active.mechanic_id) {
+            setTimeout(() => {
+              requestMechanicLocationUpdate();
+            }, 1000);
+          }
+
+          if (active.status === "arrived") {
+            setShowOTPModal(true);
+          }
+        } else if (active.status === "requested") {
+          setWaitingForMechanic(true);
+          setCurrentTrackingModal("waiting");
+          await fetchNearbyMechanicsForMap();
+        }
+      } else {
+        // No active booking, reset service location
+        setServiceLocation(null);
       }
-    } else {
-      // No active booking, reset service location
-      setServiceLocation(null);
+    } catch (error) {
+      console.error("Failed to check active booking:", error);
+      Alert.alert("Error", "Failed to check Active Bookings");
     }
-  } catch (error) {
-    console.error("Failed to check active booking:", error);
-    Alert.alert("Error", "Failed to check Active Bookings");
   }
-}
 
   async function initializeApp() {
     await fetchServices();
@@ -661,75 +681,84 @@ async function checkActiveBooking() {
     });
   };
 
-async function createBooking(service: ServiceItem) {
-  const locationToUse =
-    selectedLocation ||
-    (coords
-      ? {
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-          address: "Live GPS location",
-          isCurrentLocation: true,
-        }
-      : null);
+  async function createBooking(service: ServiceItem) {
+    const locationToUse =
+      selectedLocation ||
+      (coords
+        ? {
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+            address: "Live GPS location",
+            isCurrentLocation: true,
+          }
+        : null);
 
-  if (!locationToUse) {
-    Alert.alert("Location missing", "Please select a location first.");
-    return;
+    if (!locationToUse) {
+      Alert.alert("Location missing", "Please select a location first.");
+      return;
+    }
+
+    if (!user) {
+      Alert.alert("Not logged in", "Please login to create a booking");
+      router.push("/(auth)/login");
+      return;
+    }
+
+    if (!selectedVehicle) {
+      Alert.alert("Vehicle Required", "Please select your vehicle type.");
+      setShowVehiclePicker(true);
+      return;
+    }
+
+    setCreatingBooking(true);
+    setSelectedService(service);
+    console.log(selectedVehicle);
+    try {
+      const payload = {
+        customerId: user?.id,
+        mechanicId: null,
+        serviceId: service?.id,
+        issueNote: issueNote || `${service?.name} assistance needed`,
+        customerLat: locationToUse?.latitude,
+        customerLng: locationToUse?.longitude,
+        customerAddress: locationToUse?.address,
+        status: "requested",
+        savedLocationId: locationToUse?.savedLocationId,
+        vehicle_type: selectedVehicle.category,
+        vehicle_model: selectedVehicle.id,
+        amount : selectedService?.base_price
+      };
+
+      const { data } = await api.post("/bookings", payload);
+      setActiveBooking(data);
+
+      // ✅ Store the service location
+      setServiceLocation({
+        latitude: data.customer_lat,
+        longitude: data.customer_lng,
+        address: data.customer_address || "Service Location",
+      });
+
+      setWaitingForMechanic(true);
+      setCurrentTrackingModal("waiting");
+      socketService.joinBookingRoom(data?.id);
+
+      await fetchNearbyMechanicsForMap();
+
+      Alert.alert(
+        "Request Sent",
+        "Looking for nearby mechanics... You'll be notified when one accepts your request.",
+      );
+      setIssueNote("");
+    } catch (error: any) {
+      Alert.alert("Error", error.message || "Failed to create booking");
+      setWaitingForMechanic(false);
+      setSelectedService(null);
+      setCurrentTrackingModal(null);
+    } finally {
+      setCreatingBooking(false);
+    }
   }
-
-  if (!user) {
-    Alert.alert("Not logged in", "Please login to create a booking");
-    router.push("/(auth)/login");
-    return;
-  }
-
-  setCreatingBooking(true);
-  setSelectedService(service);
-
-  try {
-    const payload = {
-      customerId: user?.id,
-      mechanicId: null,
-      serviceId: service?.id,
-      issueNote: issueNote || `${service?.name} assistance needed`,
-      customerLat: locationToUse?.latitude,
-      customerLng: locationToUse?.longitude,
-      customerAddress: locationToUse?.address,
-      status: "requested",
-      savedLocationId: locationToUse?.savedLocationId,
-    };
-
-    const { data } = await api.post("/bookings", payload);
-    setActiveBooking(data);
-    
-    // ✅ Store the service location
-    setServiceLocation({
-      latitude: data.customer_lat,
-      longitude: data.customer_lng,
-      address: data.customer_address || "Service Location",
-    });
-    
-    setWaitingForMechanic(true);
-    setCurrentTrackingModal("waiting");
-    socketService.joinBookingRoom(data?.id);
-
-    await fetchNearbyMechanicsForMap();
-
-    Alert.alert(
-      "Request Sent",
-      "Looking for nearby mechanics... You'll be notified when one accepts your request.",
-    );
-    setIssueNote("");
-  } catch (error: any) {
-    Alert.alert("Error", error.message || "Failed to create booking");
-    setWaitingForMechanic(false);
-    setSelectedService(null);
-    setCurrentTrackingModal(null);
-  } finally {
-    setCreatingBooking(false);
-  }
-}
 
   function startTrackingMechanic(booking: Booking) {
     if (booking.mechanic_id) {
@@ -1051,341 +1080,350 @@ async function createBooking(service: ServiceItem) {
   );
 
   // Render Live Tracking Screen - FIXED VERSION
-// Render Live Tracking Screen - FIXED with Service Location
-const renderTrackingScreen = () => {
-  console.log("Rendering tracking screen - Status:", {
-    currentTrackingModal,
-    activeBookingStatus: activeBooking?.status,
-    mechanicLocation,
-    serviceLocation,
-    hasRouteInfo: !!routeInfo,
-  });
-  
-  if (
-    currentTrackingModal !== "tracking" ||
-    !activeBooking ||
-    activeBooking.status === "completed"
-  ) {
-    return null;
-  }
+  // Render Live Tracking Screen - FIXED with Service Location
+  const renderTrackingScreen = () => {
+    console.log("Rendering tracking screen - Status:", {
+      currentTrackingModal,
+      activeBookingStatus: activeBooking?.status,
+      mechanicLocation,
+      serviceLocation,
+      hasRouteInfo: !!routeInfo,
+    });
 
-  // ✅ Use service location instead of current location (coords)
-  const destination = serviceLocation || (coords ? {
-    latitude: coords.latitude,
-    longitude: coords.longitude,
-  } : null);
-  
-  const distance = mechanicLocation && destination
-    ? calculateDistance(
-        destination.latitude,
-        destination.longitude,
-        mechanicLocation.latitude,
-        mechanicLocation.longitude,
-      )
-    : null;
+    if (
+      currentTrackingModal !== "tracking" ||
+      !activeBooking ||
+      activeBooking.status === "completed"
+    ) {
+      return null;
+    }
 
-  const hasValidLocations = destination && mechanicLocation;
-  const displayMechanicName =
-    mechanicName || activeBooking?.mechanic?.full_name || "Mechanic";
-  
-  // Log for debugging
-  console.log("Tracking locations:", {
-    destination,
-    mechanicLocation,
-    hasValidLocations,
-  });
+    // ✅ Use service location instead of current location (coords)
+    const destination =
+      serviceLocation ||
+      (coords
+        ? {
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+          }
+        : null);
 
-  return (
-    <Modal
-      visible={true}
-      transparent={false}
-      animationType="slide"
-      onRequestClose={() => {
-        if (currentTrackingModal === "tracking") {
-          cancelActiveBooking();
-        }
-      }}
-    >
-      <SafeAreaView style={styles.trackingContainer}>
-        <View style={styles.trackingHeader}>
-          <Text style={styles.trackingTitle}>
-            {activeBooking.status === "accepted" && "✓ Mechanic Assigned!"}
-            {activeBooking.status === "on_the_way" &&
-              "🚗 Mechanic is Coming!"}
-            {activeBooking.status === "arrived" && "📍 Mechanic Has Arrived!"}
-          </Text>
-          <TouchableOpacity
-            onPress={cancelActiveBooking}
-            style={styles.trackingCancelButton}
-          >
-            <Ionicons name="close" size={24} color="#EF4444" />
-          </TouchableOpacity>
-        </View>
+    const distance =
+      mechanicLocation && destination
+        ? calculateDistance(
+            destination.latitude,
+            destination.longitude,
+            mechanicLocation.latitude,
+            mechanicLocation.longitude,
+          )
+        : null;
 
-        <View style={styles.mapContainer}>
-          {hasValidLocations ? (
-            <MapView
-              ref={mapRef}
-              style={styles.map}
-              provider={PROVIDER_GOOGLE}
-              initialRegion={{
-                latitude: (destination.latitude + mechanicLocation.latitude) / 2,
-                longitude: (destination.longitude + mechanicLocation.longitude) / 2,
-                latitudeDelta:
-                  Math.abs(destination.latitude - mechanicLocation.latitude) *
-                    1.5 +
-                  0.01,
-                longitudeDelta:
-                  Math.abs(destination.longitude - mechanicLocation.longitude) *
-                    1.5 +
-                  0.01,
-              }}
-              showsUserLocation={false} // Don't show user's current location, show service location instead
-              showsMyLocationButton={false}
-              onMapReady={() => {
-                console.log("Map ready, fitting coordinates");
-                setTimeout(() => {
-                  mapRef.current?.fitToCoordinates(
-                    [destination, mechanicLocation],
-                    {
-                      edgePadding: {
-                        top: 100,
-                        right: 100,
-                        bottom: 100,
-                        left: 100,
-                      },
-                      animated: true,
-                    },
-                  );
-                }, 500);
-              }}
+    const hasValidLocations = destination && mechanicLocation;
+    const displayMechanicName =
+      mechanicName || activeBooking?.mechanic?.full_name || "Mechanic";
+
+    // Log for debugging
+    console.log("Tracking locations:", {
+      destination,
+      mechanicLocation,
+      hasValidLocations,
+    });
+
+    return (
+      <Modal
+        visible={true}
+        transparent={false}
+        animationType="slide"
+        onRequestClose={() => {
+          if (currentTrackingModal === "tracking") {
+            cancelActiveBooking();
+          }
+        }}
+      >
+        <SafeAreaView style={styles.trackingContainer}>
+          <View style={styles.trackingHeader}>
+            <Text style={styles.trackingTitle}>
+              {activeBooking.status === "accepted" && "✓ Mechanic Assigned!"}
+              {activeBooking.status === "on_the_way" &&
+                "🚗 Mechanic is Coming!"}
+              {activeBooking.status === "arrived" && "📍 Mechanic Has Arrived!"}
+            </Text>
+            <TouchableOpacity
+              onPress={cancelActiveBooking}
+              style={styles.trackingCancelButton}
             >
-              {/* Service Location Marker (where customer requested service) */}
-              <Marker coordinate={destination} pinColor="#3B82F6">
-                <View style={styles.serviceLocationMarker}>
-                  <Ionicons name="location" size={20} color="#FFF" />
-                </View>
-                <Callout>
-                  <Text style={styles.calloutText}>Service Location</Text>
-                  {serviceLocation?.address && (
-                    <Text style={styles.calloutAddress}>
-                      {serviceLocation.address}
-                    </Text>
-                  )}
-                </Callout>
-              </Marker>
+              <Ionicons name="close" size={24} color="#EF4444" />
+            </TouchableOpacity>
+          </View>
 
-              {/* Mechanic Location Marker */}
-              <Marker coordinate={mechanicLocation} pinColor="#F59E0B">
-                <View style={styles.trackingMechanicMarker}>
-                  <Ionicons name="car" size={20} color="#FFF" />
-                </View>
-                <Callout>
-                  <Text style={styles.calloutText}>
-                    {displayMechanicName}
-                  </Text>
-                  {distance && (
-                    <Text style={styles.calloutDistance}>
-                      {distance < 1
-                        ? `${Math.round(distance * 1000)}m`
-                        : `${distance.toFixed(1)}km`}{" "}
-                      away
-                    </Text>
-                  )}
-                </Callout>
-              </Marker>
-
-              {/* Route Directions */}
-              {GOOGLE_MAPS_API_KEY &&
-                GOOGLE_MAPS_API_KEY !== "your_api_key_here" && (
-                  <MapViewDirections
-                    origin={mechanicLocation}
-                    destination={destination}
-                    apikey={GOOGLE_MAPS_API_KEY}
-                    strokeWidth={4}
-                    strokeColor="#10B981"
-                    mode="DRIVING"
-                    optimizeWaypoints={true}
-                    onReady={(result) => {
-                      console.log(
-                        "✅ Route ready! Distance:",
-                        result.distance,
-                        "km, Duration:",
-                        result.duration,
-                        "min"
-                      );
-                      setRouteInfo({
-                        distance: result.distance,
-                        duration: result.duration,
-                        distanceText:
-                          result.distance < 1
-                            ? `${Math.round(result.distance * 1000)}m`
-                            : `${result.distance.toFixed(1)}km`,
-                        durationText:
-                          result.duration < 1
-                            ? "< 1 minute"
-                            : `${Math.round(result.duration)} min`,
-                      });
-                      setRouteError(null);
-
-                      // Fit map to show full route
-                      mapRef.current?.fitToCoordinates(
-                        [destination, mechanicLocation],
-                        {
-                          edgePadding: {
-                            top: 100,
-                            right: 100,
-                            bottom: 100,
-                            left: 100,
-                          },
-                          animated: true,
+          <View style={styles.mapContainer}>
+            {hasValidLocations ? (
+              <MapView
+                ref={mapRef}
+                style={styles.map}
+                provider={PROVIDER_GOOGLE}
+                initialRegion={{
+                  latitude:
+                    (destination.latitude + mechanicLocation.latitude) / 2,
+                  longitude:
+                    (destination.longitude + mechanicLocation.longitude) / 2,
+                  latitudeDelta:
+                    Math.abs(destination.latitude - mechanicLocation.latitude) *
+                      1.5 +
+                    0.01,
+                  longitudeDelta:
+                    Math.abs(
+                      destination.longitude - mechanicLocation.longitude,
+                    ) *
+                      1.5 +
+                    0.01,
+                }}
+                showsUserLocation={false} // Don't show user's current location, show service location instead
+                showsMyLocationButton={false}
+                onMapReady={() => {
+                  console.log("Map ready, fitting coordinates");
+                  setTimeout(() => {
+                    mapRef.current?.fitToCoordinates(
+                      [destination, mechanicLocation],
+                      {
+                        edgePadding: {
+                          top: 100,
+                          right: 100,
+                          bottom: 100,
+                          left: 100,
                         },
-                      );
-                    }}
-                    onError={(errorMessage) => {
-                      console.error("❌ Route error:", errorMessage);
-                      setRouteError(errorMessage);
-                      // Retry logic - try again after 3 seconds if failed
-                      if (routeRetryCount.current < 3) {
-                        setTimeout(() => {
-                          routeRetryCount.current++;
-                          console.log(
-                            `Retrying route (${routeRetryCount.current}/3)...`
-                          );
-                          setRouteInfo(null);
-                        }, 3000);
-                      }
-                    }}
-                    resetOnChange={false}
-                    timePrecision="now"
-                    precision="high"
-                  />
-                )}
-            </MapView>
-          ) : (
-            <View style={styles.loadingMapContainer}>
-              <ActivityIndicator size="large" color="#0F172A" />
-              <Text style={styles.loadingMapText}>
-                {!destination
-                  ? "Loading service location..."
-                  : "Waiting for mechanic location..."}
-              </Text>
-              <TouchableOpacity
-                style={styles.refreshLocationButton}
-                onPress={requestMechanicLocationUpdate}
+                        animated: true,
+                      },
+                    );
+                  }, 500);
+                }}
               >
-                <Text style={styles.refreshLocationText}>
-                  Refresh Location
+                {/* Service Location Marker (where customer requested service) */}
+                <Marker coordinate={destination} pinColor="#3B82F6">
+                  <View style={styles.serviceLocationMarker}>
+                    <Ionicons name="location" size={20} color="#FFF" />
+                  </View>
+                  <Callout>
+                    <Text style={styles.calloutText}>Service Location</Text>
+                    {serviceLocation?.address && (
+                      <Text style={styles.calloutAddress}>
+                        {serviceLocation.address}
+                      </Text>
+                    )}
+                  </Callout>
+                </Marker>
+
+                {/* Mechanic Location Marker */}
+                <Marker coordinate={mechanicLocation} pinColor="#F59E0B">
+                  <View style={styles.trackingMechanicMarker}>
+                    <Ionicons name="car" size={20} color="#FFF" />
+                  </View>
+                  <Callout>
+                    <Text style={styles.calloutText}>
+                      {displayMechanicName}
+                    </Text>
+                    {distance && (
+                      <Text style={styles.calloutDistance}>
+                        {distance < 1
+                          ? `${Math.round(distance * 1000)}m`
+                          : `${distance.toFixed(1)}km`}{" "}
+                        away
+                      </Text>
+                    )}
+                  </Callout>
+                </Marker>
+
+                {/* Route Directions */}
+                {GOOGLE_MAPS_API_KEY &&
+                  GOOGLE_MAPS_API_KEY !== "your_api_key_here" && (
+                    <MapViewDirections
+                      origin={mechanicLocation}
+                      destination={destination}
+                      apikey={GOOGLE_MAPS_API_KEY}
+                      strokeWidth={4}
+                      strokeColor="#10B981"
+                      mode="DRIVING"
+                      optimizeWaypoints={true}
+                      onReady={(result) => {
+                        console.log(
+                          "✅ Route ready! Distance:",
+                          result.distance,
+                          "km, Duration:",
+                          result.duration,
+                          "min",
+                        );
+                        setRouteInfo({
+                          distance: result.distance,
+                          duration: result.duration,
+                          distanceText:
+                            result.distance < 1
+                              ? `${Math.round(result.distance * 1000)}m`
+                              : `${result.distance.toFixed(1)}km`,
+                          durationText:
+                            result.duration < 1
+                              ? "< 1 minute"
+                              : `${Math.round(result.duration)} min`,
+                        });
+                        setRouteError(null);
+
+                        // Fit map to show full route
+                        mapRef.current?.fitToCoordinates(
+                          [destination, mechanicLocation],
+                          {
+                            edgePadding: {
+                              top: 100,
+                              right: 100,
+                              bottom: 100,
+                              left: 100,
+                            },
+                            animated: true,
+                          },
+                        );
+                      }}
+                      onError={(errorMessage) => {
+                        console.error("❌ Route error:", errorMessage);
+                        setRouteError(errorMessage);
+                        // Retry logic - try again after 3 seconds if failed
+                        if (routeRetryCount.current < 3) {
+                          setTimeout(() => {
+                            routeRetryCount.current++;
+                            console.log(
+                              `Retrying route (${routeRetryCount.current}/3)...`,
+                            );
+                            setRouteInfo(null);
+                          }, 3000);
+                        }
+                      }}
+                      resetOnChange={false}
+                      timePrecision="now"
+                      precision="high"
+                    />
+                  )}
+              </MapView>
+            ) : (
+              <View style={styles.loadingMapContainer}>
+                <ActivityIndicator size="large" color="#0F172A" />
+                <Text style={styles.loadingMapText}>
+                  {!destination
+                    ? "Loading service location..."
+                    : "Waiting for mechanic location..."}
+                </Text>
+                <TouchableOpacity
+                  style={styles.refreshLocationButton}
+                  onPress={requestMechanicLocationUpdate}
+                >
+                  <Text style={styles.refreshLocationText}>
+                    Refresh Location
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.trackingInfoCard}>
+            <View style={styles.trackingInfoRow}>
+              <Ionicons name="location" size={20} color="#64748B" />
+              <Text style={styles.trackingInfoLabel}>Service Location:</Text>
+              <Text style={styles.trackingInfoValue} numberOfLines={1}>
+                {serviceLocation?.address || "Service Location"}
+              </Text>
+            </View>
+
+            <View style={styles.trackingInfoRow}>
+              <Ionicons name="person" size={20} color="#64748B" />
+              <Text style={styles.trackingInfoLabel}>Mechanic:</Text>
+              <Text style={styles.trackingInfoValue}>
+                {displayMechanicName}
+              </Text>
+            </View>
+
+            <View style={styles.trackingInfoRow}>
+              <Ionicons name="time" size={20} color="#64748B" />
+              <Text style={styles.trackingInfoLabel}>Status:</Text>
+              <Text style={[styles.trackingInfoValue, styles.statusValue]}>
+                {activeBooking.status?.replace("_", " ").toUpperCase()}
+              </Text>
+            </View>
+
+            {/* Display Google Maps ETA */}
+            {routeInfo && routeInfo.duration > 0 ? (
+              <>
+                <View style={styles.trackingInfoRow}>
+                  <Ionicons name="car" size={20} color="#64748B" />
+                  <Text style={styles.trackingInfoLabel}>ETA:</Text>
+                  <Text style={[styles.trackingInfoValue, styles.etaValue]}>
+                    {routeInfo.durationText}
+                  </Text>
+                </View>
+                <View style={styles.trackingInfoRow}>
+                  <Ionicons name="navigate" size={20} color="#64748B" />
+                  <Text style={styles.trackingInfoLabel}>Distance:</Text>
+                  <Text style={styles.trackingInfoValue}>
+                    {routeInfo.distanceText}
+                  </Text>
+                </View>
+              </>
+            ) : distance !== null && distance > 0 ? (
+              <>
+                <View style={styles.trackingInfoRow}>
+                  <Ionicons name="location" size={20} color="#64748B" />
+                  <Text style={styles.trackingInfoLabel}>Distance:</Text>
+                  <Text style={styles.trackingInfoValue}>
+                    {distance < 1
+                      ? `${Math.round(distance * 1000)}m`
+                      : `${distance.toFixed(1)}km`}
+                  </Text>
+                </View>
+                <View style={styles.trackingInfoRow}>
+                  <Ionicons name="car" size={20} color="#64748B" />
+                  <Text style={styles.trackingInfoLabel}>Est. ETA:</Text>
+                  <Text style={styles.trackingInfoValue}>
+                    {distance < 1
+                      ? "2-3 min"
+                      : `~${Math.round(distance * 2)} min`}
+                  </Text>
+                </View>
+                {routeError && (
+                  <Text style={styles.routeErrorText}>
+                    Using estimated ETA (GPS only)
+                  </Text>
+                )}
+              </>
+            ) : (
+              <View style={styles.trackingInfoRow}>
+                <ActivityIndicator size="small" color="#64748B" />
+                <Text style={styles.trackingInfoLabel}>
+                  Calculating route...
+                </Text>
+              </View>
+            )}
+
+            {activeBooking.status === "arrived" && (
+              <TouchableOpacity
+                style={styles.completeButton}
+                onPress={() => setShowOTPModal(true)}
+              >
+                <Text style={styles.completeButtonText}>
+                  Complete Service with OTP
                 </Text>
               </TouchableOpacity>
-            </View>
-          )}
-        </View>
+            )}
 
-        <View style={styles.trackingInfoCard}>
-          <View style={styles.trackingInfoRow}>
-            <Ionicons name="location" size={20} color="#64748B" />
-            <Text style={styles.trackingInfoLabel}>Service Location:</Text>
-            <Text style={styles.trackingInfoValue} numberOfLines={1}>
-              {serviceLocation?.address || "Service Location"}
-            </Text>
+            {activeBooking.status !== "arrived" && (
+              <TouchableOpacity
+                style={styles.cancelTrackingButton}
+                onPress={cancelActiveBooking}
+              >
+                <Text style={styles.cancelTrackingButtonText}>
+                  Cancel Service
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
-
-          <View style={styles.trackingInfoRow}>
-            <Ionicons name="person" size={20} color="#64748B" />
-            <Text style={styles.trackingInfoLabel}>Mechanic:</Text>
-            <Text style={styles.trackingInfoValue}>
-              {displayMechanicName}
-            </Text>
-          </View>
-
-          <View style={styles.trackingInfoRow}>
-            <Ionicons name="time" size={20} color="#64748B" />
-            <Text style={styles.trackingInfoLabel}>Status:</Text>
-            <Text style={[styles.trackingInfoValue, styles.statusValue]}>
-              {activeBooking.status?.replace("_", " ").toUpperCase()}
-            </Text>
-          </View>
-
-          {/* Display Google Maps ETA */}
-          {routeInfo && routeInfo.duration > 0 ? (
-            <>
-              <View style={styles.trackingInfoRow}>
-                <Ionicons name="car" size={20} color="#64748B" />
-                <Text style={styles.trackingInfoLabel}>ETA:</Text>
-                <Text style={[styles.trackingInfoValue, styles.etaValue]}>
-                  {routeInfo.durationText}
-                </Text>
-              </View>
-              <View style={styles.trackingInfoRow}>
-                <Ionicons name="navigate" size={20} color="#64748B" />
-                <Text style={styles.trackingInfoLabel}>Distance:</Text>
-                <Text style={styles.trackingInfoValue}>
-                  {routeInfo.distanceText}
-                </Text>
-              </View>
-            </>
-          ) : distance !== null && distance > 0 ? (
-            <>
-              <View style={styles.trackingInfoRow}>
-                <Ionicons name="location" size={20} color="#64748B" />
-                <Text style={styles.trackingInfoLabel}>Distance:</Text>
-                <Text style={styles.trackingInfoValue}>
-                  {distance < 1
-                    ? `${Math.round(distance * 1000)}m`
-                    : `${distance.toFixed(1)}km`}
-                </Text>
-              </View>
-              <View style={styles.trackingInfoRow}>
-                <Ionicons name="car" size={20} color="#64748B" />
-                <Text style={styles.trackingInfoLabel}>Est. ETA:</Text>
-                <Text style={styles.trackingInfoValue}>
-                  {distance < 1
-                    ? "2-3 min"
-                    : `~${Math.round(distance * 2)} min`}
-                </Text>
-              </View>
-              {routeError && (
-                <Text style={styles.routeErrorText}>
-                  Using estimated ETA (GPS only)
-                </Text>
-              )}
-            </>
-          ) : (
-            <View style={styles.trackingInfoRow}>
-              <ActivityIndicator size="small" color="#64748B" />
-              <Text style={styles.trackingInfoLabel}>
-                Calculating route...
-              </Text>
-            </View>
-          )}
-
-          {activeBooking.status === "arrived" && (
-            <TouchableOpacity
-              style={styles.completeButton}
-              onPress={() => setShowOTPModal(true)}
-            >
-              <Text style={styles.completeButtonText}>
-                Complete Service with OTP
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          {activeBooking.status !== "arrived" && (
-            <TouchableOpacity
-              style={styles.cancelTrackingButton}
-              onPress={cancelActiveBooking}
-            >
-              <Text style={styles.cancelTrackingButtonText}>
-                Cancel Service
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </SafeAreaView>
-    </Modal>
-  );
-};
+        </SafeAreaView>
+      </Modal>
+    );
+  };
 
   // Render OTP Modal
   const renderOTPModal = () => (
@@ -1623,6 +1661,39 @@ const renderTrackingScreen = () => {
               multiline
             />
 
+            <View style={styles.locationSelectorText}>
+              <Text style={styles.locationSelectorLabel}>
+                Select Vechile Type
+              </Text>
+            </View>
+
+            <View style={styles.vehicleSelector}>
+              <TouchableOpacity
+                style={styles.vehicleSelectorButton}
+                onPress={() => setShowVehiclePicker(true)}
+              >
+                <Ionicons name="car-outline" size={24} color="#0F172A" />
+                <View style={styles.vehicleSelectorText}>
+                  <Text style={styles.vehicleSelectorLabel}>Vehicle Type</Text>
+                  <Text style={styles.vehicleSelectorValue}>
+                    {selectedVehicle
+                      ? selectedVehicle.name
+                      : "Select your vehicle"}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <VehicleTypePicker
+              visible={showVehiclePicker}
+              onClose={() => setShowVehiclePicker(false)}
+              onSelect={(vehicle) => {
+                setSelectedVehicle(vehicle);
+                console.log("Selected vehicle:", vehicle);
+              }}
+              selectedVehicle={selectedVehicle}
+            />
             <Text style={styles.sectionTitle}>Choose Service</Text>
           </View>
         }
@@ -1829,7 +1900,32 @@ const styles = StyleSheet.create({
   },
   trackingTitle: { fontSize: 18, fontWeight: "700", color: "#0F172A" },
   trackingCancelButton: { padding: 8 },
-
+  vehicleSelector: {
+    marginBottom: 16,
+  },
+  vehicleSelectorButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFF",
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  vehicleSelectorText: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  vehicleSelectorLabel: {
+    fontSize: 12,
+    color: "#64748B",
+    marginBottom: 2,
+  },
+  vehicleSelectorValue: {
+    fontSize: 14,
+    color: "#0F172A",
+    fontWeight: "500",
+  },
   trackingInfoCard: {
     backgroundColor: "#FFF",
     padding: 20,
@@ -1983,26 +2079,26 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   serviceLocationMarker: {
-  backgroundColor: "#3B82F6",
-  width: 44,
-  height: 44,
-  borderRadius: 22,
-  justifyContent: "center",
-  alignItems: "center",
-  borderWidth: 3,
-  borderColor: "#FFF",
-  shadowColor: "#000",
-  shadowOffset: { width: 0, height: 2 },
-  shadowOpacity: 0.3,
-  shadowRadius: 4,
-  elevation: 5,
-},
-calloutAddress: {
-  fontSize: 11,
-  color: "#64748B",
-  marginTop: 2,
-  maxWidth: 150,
-},
+    backgroundColor: "#3B82F6",
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 3,
+    borderColor: "#FFF",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  calloutAddress: {
+    fontSize: 11,
+    color: "#64748B",
+    marginTop: 2,
+    maxWidth: 150,
+  },
   submitRatingButtonText: { color: "#FFF", fontSize: 16, fontWeight: "600" },
   skipButton: { paddingVertical: 12, alignItems: "center" },
   skipButtonText: { color: "#64748B", fontSize: 14 },

@@ -378,7 +378,7 @@ export default function MechanicDashboard() {
 
       Alert.alert(
         "New Service Request!",
-        `A customer needs ${booking.service?.name || "assistance"}. Tap to view details.`,
+        `A customer needs ${booking.service?.name || "assistance"}. Tap to view details. vechile type ${booking.vehicle_type} :- ${booking.vehicle_model}`,
         [
           {
             text: "View",
@@ -690,6 +690,7 @@ export default function MechanicDashboard() {
   }, []);
 
   const renderJobCard = ({ item }: { item: Booking }) => {
+    console.log(item)
     const isMyJob = activeTab === "myJobs";
     const hasCustomerRating = item.customer_rating;
     const hasMechanicRating = item.mechanic_rating;
@@ -730,6 +731,14 @@ export default function MechanicDashboard() {
 
         {item.customer_address && (
           <Text style={styles.cardMeta}>📍 {item.customer_address}</Text>
+        )}
+
+         {item.vehicle_type && (
+          <Text style={styles.cardMeta}>📍 {item.vehicle_type}</Text>
+        )}
+
+         {item.vehicle_model && (
+          <Text style={styles.cardMeta}>📍 {item.vehicle_model}</Text>
         )}
 
         {item.customer_lat && item.customer_lng && currentLocation && (
@@ -936,9 +945,15 @@ export default function MechanicDashboard() {
                   Issue: {selectedBooking.issue_note || "Not specified"}
                 </Text>
                 <Text style={styles.modalDetailText}>
-                  Location:{" "}
-                  {selectedBooking.customer_address || "Address provided"}
+                  Vehicle Model:{" "}
+                  {selectedBooking.vehicle_type || "Address provided"}
                 </Text>
+
+                 <Text style={styles.modalDetailText}>
+                  Vehicle Type:{" "}
+                  {selectedBooking.vehicle_model || "Address provided"}
+                </Text>
+
               </View>
             )}
             <View style={styles.modalButtons}>

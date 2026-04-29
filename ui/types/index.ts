@@ -35,6 +35,8 @@ export interface Booking {
         lng: number;
     };
     saved_location_id?: string;
+    vehicle_type : string;
+    vehicle_model : string;
 }
 
 export interface ServiceItem {

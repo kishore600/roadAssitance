@@ -18,11 +18,13 @@ import {
   addCustomerRating,
   getMechanicTodayEarnings,
 } from "../services/booking.service";
+import { VEHICLE_TYPES } from '../constants/vehicleTypes';
 
 export const bookingsRouter = Router();
 
 bookingsRouter.post("/", async (req, res) => {
   try {
+    console.log(req.body)
     const payload = {
       customer_id: req.body.customerId,
       mechanic_id: req.body.mechanicId || null,
@@ -31,7 +33,9 @@ bookingsRouter.post("/", async (req, res) => {
       customer_lat: req.body.customerLat,
       customer_lng: req.body.customerLng,
       customer_address: req.body.customerAddress,
-      amount: 299,
+      vehicle_type: req.body.vehicle_type,
+      vehicle_model: req.body.vehicle_model,
+      amount: req.body.amount|| 299,
     };
 
     const data = await createBooking(payload);
@@ -44,7 +48,19 @@ bookingsRouter.post("/", async (req, res) => {
     });
   }
 });
-
+bookingsRouter.get("/vehicle-types", async (_req, res) => {
+  try {
+    res.json({ 
+      success: true, 
+      vehicleTypes: VEHICLE_TYPES 
+    });
+  } catch (err) {
+    console.error("Error fetching vehicle types:", err);
+    res.status(500).json({ 
+      error: "Failed to fetch vehicle types" 
+    });
+  }
+});
 bookingsRouter.get("/customer/:customerId", async (req, res) => {
   const data = await getCustomerBookings(req.params.customerId);
   res.json(data);
