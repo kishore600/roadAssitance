@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 
 const getBaseUrl = () => {
   const url = process.env.EXPO_PUBLIC_API_URL;
-
+  console.log(url)
   if (!url) {
     throw new Error('❌ EXPO_PUBLIC_API_URL is not set');
   }

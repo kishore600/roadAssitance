@@ -7,10 +7,120 @@ import { emitBookingUpdate, emitMechanicLocation, emitNewBooking } from '../sock
 const activeBookingTimers = new Map<string, NodeJS.Timeout>();
 
 export async function getServices() {
-  const { data, error } = await supabaseAdmin.from('services').select('*').order('name');
+  const { data, error } = await supabaseAdmin
+    .from('services')
+    .select('*')
+    .order('name');
   if (error) throw error;
   return data;
 }
+
+export async function getVehicleTypes() {
+  const { data, error } = await supabaseAdmin
+    .from('vehicle_types')
+    .select('*')
+    .order('display_order');
+  if (error) throw error;
+  return data;
+}
+
+export async function getServicePricing() {
+  const { data, error } = await supabaseAdmin
+    .from('mobile_service_pricing')
+    .select('*')
+    .order('display_order', { ascending: true })
+    .order('service_name', { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
+export async function getPricingByVehicleType(vehicleTypeId: number) {
+  const { data, error } = await supabaseAdmin
+    .from('service_pricing')
+    .select(`
+      *,
+      services:service_id (id, name, base_price),
+      vehicle_types:vehicle_type_id (id, name, category, display_order)
+    `)
+    .eq('vehicle_type_id', vehicleTypeId)
+    .order('service_id');
+  if (error) throw error;
+  return data;
+}
+
+export async function getPricingByService(serviceId: string) {
+  const { data, error } = await supabaseAdmin
+    .from('service_pricing')
+    .select(`
+      *,
+      services:service_id (id, name, base_price),
+      vehicle_types:vehicle_type_id (id, name, category, display_order)
+    `)
+    .eq('service_id', serviceId)
+    .order('vehicle_type_id');
+  if (error) throw error;
+  return data;
+}
+
+export async function getPricingForVehicleAndService(vehicleTypeId: number, serviceId: string) {
+  const { data, error } = await supabaseAdmin
+    .from('service_pricing')
+    .select(`
+      *,
+      services:service_id (id, name, base_price),
+      vehicle_types:vehicle_type_id (id, name, category)
+    `)
+    .eq('vehicle_type_id', vehicleTypeId)
+    .eq('service_id', serviceId)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return data;
+}
+
+export async function createService(name: string, basePrice: number) {
+  const { data, error } = await supabaseAdmin
+    .from('services')
+    .insert([{ name, base_price: basePrice }])
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateServicePricing(
+  pricingId: number, 
+  price: number, 
+  notes?: string
+) {
+  const { data, error } = await supabaseAdmin
+    .from('service_pricing')
+    .update({ price, notes })
+    .eq('id', pricingId)
+    .select();
+  if (error) throw error;
+  return data;
+}
+
+export async function getVehicleTypeByName(name: string) {
+  const { data, error } = await supabaseAdmin
+    .from('vehicle_types')
+    .select('*')
+    .eq('name', name)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return data;
+}
+
+export async function getServiceByName(name: string) {
+  const { data, error } = await supabaseAdmin
+    .from('services')
+    .select('*')
+    .eq('name', name)
+    .single();
+  if (error && error.code !== 'PGRST116') throw error;
+  return data;
+}
+
 
 export async function getNearbyMechanics(customerLat?: number, customerLng?: number, radiusKm: number = 10) {
   const { data, error } = await supabaseAdmin

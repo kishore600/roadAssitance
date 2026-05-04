@@ -1,5 +1,5 @@
 // components/VehicleTypePicker.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,15 +7,16 @@ import {
   StyleSheet,
   Modal,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { api } from '@/lib/api';
 
 export interface VehicleType {
-  id: string;
+  id: number;  // Changed to number to match database
   name: string;
-  category: '2-wheeler' | '3-wheeler' | '4-wheeler';
-  size: 'small' | 'medium' | 'large';
-  examples?: string[];
+  category: string;
+  display_order: number;
 }
 
 interface VehicleTypePickerProps {
@@ -25,39 +26,117 @@ interface VehicleTypePickerProps {
   selectedVehicle?: VehicleType | null;
 }
 
-const VEHICLE_CATEGORIES = [
-  { id: '2-wheeler', name: 'Two Wheelers', icon: 'bicycle' as const },
-  { id: '3-wheeler', name: 'Three Wheelers', icon: 'car-sport' as const },
-  { id: '4-wheeler', name: 'Four Wheelers', icon: 'car' as const },
-];
+// Category icons mapping
+const getCategoryIcon = (category: string): keyof typeof Ionicons.glyphMap => {
+  switch (category?.toLowerCase()) {
+    case 'two-wheeler':
+      return 'bicycle';
+    case 'auto':
+      return 'car-sport';
+    case 'four-wheeler':
+      return 'car';
+    case 'commercial':
+      return 'bus';
+    case 'heavy':
+      return 'bus';
+    default:
+      return 'car';
+  }
+};
 
-const VEHICLE_TYPES: VehicleType[] = [
-  // 2-Wheelers
-  { id: 'motorcycle', name: 'Motorcycle/Scooter', category: '2-wheeler', size: 'small', examples: ['Activa', 'Pulsar', 'Scooty'] },
-  { id: 'bike', name: 'Bike', category: '2-wheeler', size: 'small', examples: ['Royal Enfield', 'KTM', 'Duke'] },
-  
-  // 3-Wheelers
-  { id: 'auto', name: 'Auto-rickshaw', category: '3-wheeler', size: 'medium', examples: ['Bajaj Auto', 'Piaggio'] },
-  
-  // 4-Wheelers
-  { id: 'hatchback', name: 'Hatchback', category: '4-wheeler', size: 'small', examples: ['Maruti Swift', 'Hyundai i10', 'Tata Punch'] },
-  { id: 'sedan', name: 'Sedan', category: '4-wheeler', size: 'medium', examples: ['Honda City', 'Hyundai Verna', 'Maruti Ciaz'] },
-  { id: 'suv', name: 'SUV/MPV', category: '4-wheeler', size: 'large', examples: ['Hyundai Creta', 'MG Hector', 'Toyota Innova'] },
-  { id: 'luxury', name: 'Luxury Car', category: '4-wheeler', size: 'large', examples: ['BMW', 'Mercedes', 'Audi'] },
-];
+// Get example vehicles based on category
+const getExampleVehicles = (category: string): string[] => {
+  switch (category?.toLowerCase()) {
+    case 'two-wheeler':
+      return ['Activa', 'Pulsar', 'Scooty'];
+    case 'auto':
+      return ['Bajaj Auto', 'Piaggio'];
+    case 'four-wheeler':
+      return ['Maruti Swift', 'Hyundai i10', 'Tata Punch'];
+    case 'commercial':
+      return ['Tata Ace', 'Mahindra Bolero'];
+    case 'heavy':
+      return ['Tata Truck', 'Ashok Leyland'];
+    default:
+      return [];
+  }
+};
 
-export function VehicleTypePicker({ visible, onClose, onSelect, selectedVehicle }: VehicleTypePickerProps) {
-  const [selectedCategory, setSelectedCategory] = useState<string>('2-wheeler');
+// Get size based on category
+const getVehicleSize = (category: string): string => {
+  switch (category?.toLowerCase()) {
+    case 'two-wheeler':
+      return 'Small';
+    case 'auto':
+      return 'Medium';
+    case 'four-wheeler':
+      return 'Medium';
+    case 'commercial':
+      return 'Large';
+    case 'heavy':
+      return 'Extra Large';
+    default:
+      return 'Medium';
+  }
+};
 
-  const filteredVehicles = VEHICLE_TYPES.filter(v => v.category === selectedCategory);
+export function VehicleTypePicker({ 
+  visible, 
+  onClose, 
+  onSelect, 
+  selectedVehicle 
+}: VehicleTypePickerProps) {
+  const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
-  const getCategoryIcon = (categoryId: string) => {
-    switch (categoryId) {
-      case '2-wheeler': return 'bicycle';
-      case '3-wheeler': return 'car-sport';
-      case '4-wheeler': return 'car';
-      default: return 'car';
+  // Fetch vehicle types from API
+  useEffect(() => {
+    if (visible) {
+      fetchVehicleTypes();
     }
+  }, [visible]);
+
+  const fetchVehicleTypes = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data } = await api.get('/services/vehicle-types');
+      console.log('Fetched vehicle types:', data);
+      
+      // Ensure IDs are numbers
+      const normalizedData = data.map((vt: any) => ({
+        id: Number(vt.id),
+        name: vt.name,
+        category: vt.category,
+        display_order: vt.display_order
+      }));
+      
+      setVehicleTypes(normalizedData);
+    } catch (error) {
+      console.error('Failed to fetch vehicle types:', error);
+      setError('Failed to load vehicle types');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Get unique categories from vehicle types
+  const categories = ['all', ...new Set(vehicleTypes.map(vt => vt.category))];
+
+  // Filter vehicle types by selected category
+  const filteredVehicles = selectedCategory === 'all'
+    ? vehicleTypes
+    : vehicleTypes.filter(vt => vt.category === selectedCategory);
+
+  // Sort by display_order
+  const sortedVehicles = [...filteredVehicles].sort((a, b) => a.display_order - b.display_order);
+
+  const handleSelect = (vehicle: VehicleType) => {
+    console.log('Selected vehicle:', vehicle);
+    onSelect(vehicle);
+    onClose();
   };
 
   return (
@@ -71,105 +150,127 @@ export function VehicleTypePicker({ visible, onClose, onSelect, selectedVehicle 
             </TouchableOpacity>
           </View>
 
-          {/* Category Tabs */}
-          <View style={styles.categoryTabs}>
-            {VEHICLE_CATEGORIES.map((category) => (
-              <TouchableOpacity
-                key={category.id}
-                style={[
-                  styles.categoryTab,
-                  selectedCategory === category.id && styles.activeCategoryTab,
-                ]}
-                onPress={() => setSelectedCategory(category.id)}
-              >
-                <Ionicons
-                  name={category.icon}
-                  size={20}
-                  color={selectedCategory === category.id ? '#0F172A' : '#64748B'}
-                />
-                <Text
-                  style={[
-                    styles.categoryTabText,
-                    selectedCategory === category.id && styles.activeCategoryTabText,
-                  ]}
-                >
-                  {category.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          {/* Loading State */}
+          {loading && (
+            <View style={styles.centerContent}>
+              <ActivityIndicator size="large" color="#0F172A" />
+              <Text style={styles.loadingText}>Loading vehicle types...</Text>
+            </View>
+          )}
 
-          <ScrollView style={styles.vehicleList}>
-            {filteredVehicles.map((vehicle) => (
-              <TouchableOpacity
-                key={vehicle.id}
-                style={[
-                  styles.vehicleItem,
-                  selectedVehicle?.id === vehicle.id && styles.selectedVehicleItem,
-                ]}
-                onPress={() => {
-                  onSelect(vehicle);
-                  onClose();
-                }}
+          {/* Error State */}
+          {error && !loading && (
+            <View style={styles.centerContent}>
+              <Ionicons name="alert-circle" size={48} color="#EF4444" />
+              <Text style={styles.errorText}>{error}</Text>
+              <TouchableOpacity style={styles.retryButton} onPress={fetchVehicleTypes}>
+                <Text style={styles.retryButtonText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Category Tabs */}
+          {!loading && !error && vehicleTypes.length > 0 && (
+            <>
+              <ScrollView 
+                horizontal 
+                showsHorizontalScrollIndicator={false}
+                style={styles.categoryTabsContainer}
+                contentContainerStyle={styles.categoryTabsContent}
               >
-                <View style={styles.vehicleInfo}>
-                  <View style={styles.vehicleIconContainer}>
+                {categories.map((category) => (
+                  <TouchableOpacity
+                    key={category}
+                    style={[
+                      styles.categoryTab,
+                      selectedCategory === category && styles.activeCategoryTab,
+                    ]}
+                    onPress={() => setSelectedCategory(category)}
+                  >
                     <Ionicons
-                      name={getVehicleIcon(vehicle.id)}
-                      size={32}
-                      color="#0F172A"
+                      name={category === 'all' ? 'apps' : getCategoryIcon(category)}
+                      size={18}
+                      color={selectedCategory === category ? '#0F172A' : '#64748B'}
                     />
-                  </View>
-                  <View style={styles.vehicleDetails}>
-                    <Text style={styles.vehicleName}>{vehicle.name}</Text>
-                    {vehicle.examples && vehicle.examples.length > 0 && (
-                      <Text style={styles.vehicleExamples}>
-                        e.g., {vehicle.examples.slice(0, 3).join(', ')}
-                      </Text>
-                    )}
-                    <View style={styles.vehicleBadges}>
-                      <View style={styles.vehicleBadge}>
-                        <Text style={styles.vehicleBadgeText}>
-                          {vehicle.size.toUpperCase()}
-                        </Text>
+                    <Text
+                      style={[
+                        styles.categoryTabText,
+                        selectedCategory === category && styles.activeCategoryTabText,
+                      ]}
+                    >
+                      {category === 'all' ? 'All' : category}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              {/* Vehicle List */}
+              <ScrollView style={styles.vehicleList}>
+                {sortedVehicles.map((vehicle) => (
+                  <TouchableOpacity
+                    key={vehicle.id}
+                    style={[
+                      styles.vehicleItem,
+                      selectedVehicle?.id === vehicle.id && styles.selectedVehicleItem,
+                    ]}
+                    onPress={() => handleSelect(vehicle)}
+                  >
+                    <View style={styles.vehicleInfo}>
+                      <View style={styles.vehicleIconContainer}>
+                        <Ionicons
+                          name={getCategoryIcon(vehicle.category)}
+                          size={32}
+                          color="#0F172A"
+                        />
+                      </View>
+                      <View style={styles.vehicleDetails}>
+                        <Text style={styles.vehicleName}>{vehicle.name}</Text>
+                        <View style={styles.vehicleMeta}>
+                          <View style={styles.vehicleBadge}>
+                            <Text style={styles.vehicleBadgeText}>
+                              {getVehicleSize(vehicle.category)}
+                            </Text>
+                          </View>
+                          <Text style={styles.vehicleCategory}>
+                            {vehicle.category}
+                          </Text>
+                        </View>
+                        <View style={styles.exampleContainer}>
+                          {getExampleVehicles(vehicle.category).slice(0, 2).map((example, idx) => (
+                            <Text key={idx} style={styles.exampleText}>
+                              {example}{idx === 0 ? ', ' : ''}
+                            </Text>
+                          ))}
+                          <Text style={styles.exampleText}>etc.</Text>
+                        </View>
                       </View>
                     </View>
-                  </View>
-                </View>
-                {selectedVehicle?.id === vehicle.id && (
-                  <Ionicons name="checkmark-circle" size={24} color="#10B981" />
-                )}
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+                    {selectedVehicle?.id === vehicle.id && (
+                      <Ionicons name="checkmark-circle" size={24} color="#10B981" />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </>
+          )}
+
+          {/* Empty State */}
+          {!loading && !error && vehicleTypes.length === 0 && (
+            <View style={styles.centerContent}>
+              <Ionicons name="car-outline" size={48} color="#94A3B8" />
+              <Text style={styles.emptyText}>No vehicle types available</Text>
+            </View>
+          )}
         </View>
       </View>
     </Modal>
   );
 }
 
-function getVehicleIcon(vehicleId: string): keyof typeof Ionicons.glyphMap {
-  switch (vehicleId) {
-    case 'motorcycle':
-    case 'bike':
-      return 'bicycle';
-    case 'auto':
-      return 'car-sport';
-    case 'hatchback':
-    case 'sedan':
-    case 'suv':
-      return 'car';
-    case 'luxury':
-      return 'car-outline';
-    default:
-      return 'car';
-  }
-}
-
 const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
-    // backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
   modalContent: {
@@ -183,7 +284,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 20,
-    borderBottomWidth: 1,
+    // borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
   },
   modalTitle: {
@@ -191,34 +292,67 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0F172A',
   },
-  categoryTabs: {
-    flexDirection: 'row',
-    padding: 12,
-    gap: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
-  },
-  categoryTab: {
-    flex: 1,
-    flexDirection: 'row',
+  centerContent: {
+    padding: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    borderRadius: 12,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#64748B',
+  },
+  errorText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#EF4444',
+    textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#0F172A',
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  emptyText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#94A3B8',
+  },
+  categoryTabsContainer: {
+    // borderBottomWidth: 1,
+    // borderBottomColor: '#E2E8F0',
+  },
+  categoryTabsContent: {
+    // paddingHorizontal: 12,
+    // paddingVertical: 12,
+  },
+  categoryTab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginHorizontal: 4,
+    borderRadius: 20,
     backgroundColor: '#F1F5F9',
+    gap: 6,
   },
   activeCategoryTab: {
-    backgroundColor: '#E2E8F0',
+    backgroundColor: '#0F172A',
   },
   categoryTabText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#64748B',
     fontWeight: '500',
   },
   activeCategoryTabText: {
-    color: '#0F172A',
-    fontWeight: '600',
+    color: '#FFF',
   },
   vehicleList: {
     padding: 16,
@@ -245,9 +379,9 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   vehicleIconContainer: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: '#FFF',
     justifyContent: 'center',
     alignItems: 'center',
@@ -261,16 +395,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#0F172A',
-    marginBottom: 4,
-  },
-  vehicleExamples: {
-    fontSize: 12,
-    color: '#64748B',
     marginBottom: 6,
   },
-  vehicleBadges: {
+  vehicleMeta: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
+    marginBottom: 6,
   },
   vehicleBadge: {
     backgroundColor: '#E2E8F0',
@@ -282,5 +413,18 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
     color: '#475569',
+  },
+  vehicleCategory: {
+    fontSize: 11,
+    color: '#64748B',
+  },
+  exampleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  exampleText: {
+    fontSize: 11,
+    color: '#94A3B8',
   },
 });

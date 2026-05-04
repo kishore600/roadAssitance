@@ -1,36 +1,169 @@
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { ServiceItem } from '@/types';
+// components/ServiceCard.tsx
+import React from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
-export function ServiceCard({ item, onPress, disabled }: { item: ServiceItem; onPress: () => void; disabled?: boolean }) {
+interface ServiceItem {
+  id: string;
+  name: string;
+  base_price: number;
+  description?: string;
+}
+
+interface ServiceCardProps {
+  item: ServiceItem;
+  onPress: () => void;
+  disabled?: boolean;
+  selectedVehicle?: any;
+  dynamicPrice?: number | null;
+  loading?: boolean;
+  priceNote?: string | null;
+}
+
+export const ServiceCard: React.FC<ServiceCardProps> = ({ 
+  item, 
+  onPress, 
+  disabled, 
+  selectedVehicle,
+  dynamicPrice,
+  loading,
+  priceNote 
+}) => {
+  const displayPrice = dynamicPrice !== null && dynamicPrice !== undefined 
+    ? dynamicPrice 
+    : item.base_price;
+  
+  const isPriceDifferent = dynamicPrice && dynamicPrice !== item.base_price;
+
   return (
     <TouchableOpacity 
-      style={[styles.card, disabled && styles.cardDisabled]} 
+      style={[styles.card, disabled && styles.disabledCard]} 
       onPress={onPress}
-      disabled={disabled}
+      disabled={disabled || loading}
     >
-      <View>
-        <Text style={styles.title}>{item.name}</Text>
-        <Text style={styles.subtitle}>Starting from ₹{item.base_price}</Text>
+      <View style={styles.cardContent}>
+        <View style={styles.iconContainer}>
+          <Ionicons name="car-outline" size={24} color="#0F172A" />
+        </View>
+        
+        <View style={styles.cardDetails}>
+          <Text style={styles.serviceName}>{item.name}</Text>
+          {item.description && (
+            <Text style={styles.serviceDescription}>{item.description}</Text>
+          )}
+          
+          {selectedVehicle && (
+            <View style={styles.vehicleInfoContainer}>
+              <Text style={styles.vehicleInfo}>
+                For {selectedVehicle.name}
+              </Text>
+              {priceNote && (
+                <Text style={styles.priceNote}>{priceNote}</Text>
+              )}
+            </View>
+          )}
+          
+          {isPriceDifferent && (
+            <View style={styles.priceComparison}>
+              <Text style={styles.basePriceStrikethrough}>
+                ₹{item.base_price}
+              </Text>
+              <Text style={styles.savedText}>
+                Save ₹{item.base_price - dynamicPrice}
+              </Text>
+            </View>
+          )}
+        </View>
+        
+        <View style={styles.priceContainer}>
+          {loading ? (
+            <ActivityIndicator size="small" color="#0F172A" />
+          ) : (
+            <>
+              <Text style={styles.price}>₹{displayPrice}</Text>
+              <Ionicons name="chevron-forward" size={20} color="#64748B" />
+            </>
+          )}
+        </View>
       </View>
-      <Text style={styles.cta}>Book →</Text>
     </TouchableOpacity>
   );
-}
+};
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
+    backgroundColor: "#FFF",
+    borderRadius: 12,
     marginBottom: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center'
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
   },
-  cardDisabled: {
+  disabledCard: {
     opacity: 0.5,
   },
-  title: { fontSize: 16, fontWeight: '700', color: '#0F172A' },
-  subtitle: { fontSize: 13, color: '#64748B', marginTop: 4 },
-  cta: { fontSize: 14, fontWeight: '700', color: '#2563EB' }
+  cardContent: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  iconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#F1F5F9",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  cardDetails: {
+    flex: 1,
+  },
+  serviceName: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#0F172A",
+    marginBottom: 4,
+  },
+  serviceDescription: {
+    fontSize: 12,
+    color: "#64748B",
+  },
+  vehicleInfoContainer: {
+    marginTop: 4,
+  },
+  vehicleInfo: {
+    fontSize: 11,
+    color: "#64748B",
+  },
+  priceNote: {
+    fontSize: 10,
+    color: "#10B981",
+    marginTop: 2,
+  },
+  priceComparison: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 4,
+    gap: 8,
+  },
+  basePriceStrikethrough: {
+    fontSize: 11,
+    color: "#94A3B8",
+    textDecorationLine: "line-through",
+  },
+  savedText: {
+    fontSize: 11,
+    color: "#10B981",
+    fontWeight: "500",
+  },
+  priceContainer: {
+    alignItems: "flex-end",
+    minWidth: 80,
+  },
+  price: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0F172A",
+    marginBottom: 4,
+  },
 });

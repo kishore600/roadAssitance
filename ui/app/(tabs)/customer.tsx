@@ -62,38 +62,6 @@ function calculateDistance(
   return R * c;
 }
 
-// Helper to format mechanic location from various possible formats
-function getMechanicLatLng(
-  booking: any,
-): { latitude: number; longitude: number } | null {
-  if (!booking) return null;
-
-  // Check multiple possible locations
-  const location =
-    booking.mechanic_location || booking.mechanic?.current_location;
-
-  if (!location) return null;
-
-  // Handle different formats
-  if (typeof location.lat === "number" && typeof location.lng === "number") {
-    return { latitude: location.lat, longitude: location.lng };
-  }
-  if (
-    typeof location.latitude === "number" &&
-    typeof location.longitude === "number"
-  ) {
-    return { latitude: location.latitude, longitude: location.longitude };
-  }
-  if (typeof location.coordinates?.lat === "number") {
-    return {
-      latitude: location.coordinates.lat,
-      longitude: location.coordinates.lng,
-    };
-  }
-
-  return null;
-}
-
 export default function CustomerScreen() {
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [nearbyMechanics, setNearbyMechanics] = useState<Mechanic[]>([]);
@@ -135,8 +103,6 @@ export default function CustomerScreen() {
   const [selectedVehicle, setSelectedVehicle] = useState<VehicleType | null>(
     null,
   );
-  const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
-  // Location picker states
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState<{
     latitude: number;
@@ -145,6 +111,11 @@ export default function CustomerScreen() {
     isCurrentLocation?: boolean;
     savedLocationId?: string;
   } | null>(null);
+  const [servicePrices, setServicePrices] = useState<Map<string, number>>(
+    new Map(),
+  );
+  const [pricingLoading, setPricingLoading] = useState(false);
+  const [priceDetails, setPriceDetails] = useState<Map<string, any>>(new Map());
 
   // Map and Tracking States
   const [mechanicLocation, setMechanicLocation] = useState<{
@@ -176,27 +147,13 @@ export default function CustomerScreen() {
       }
     }, [user]),
   );
-  async function fetchVehicleTypes() {
-    try {
-      const { data } = await api.get("/bookings/vehicle-types");
-      setVehicleTypes(data.vehicleTypes);
-    } catch (error) {
-      console.error("Failed to fetch vehicle types:", error);
-    }
-  }
 
   // Load vehicle types on mount
   useEffect(() => {
     if (user && !activeBooking) {
       initializeApp();
-      fetchVehicleTypes(); // Add this line
     }
   }, [user]);
-  // Replace socket with socketService
-  // Instead of: import { socket } from "@/lib/socket";
-  // Use: const socket = socketService;
-
-  // Update your useEffects:
 
   useEffect(() => {
     // Listen for service completion events
@@ -260,6 +217,86 @@ export default function CustomerScreen() {
     );
     return () => subscription.remove();
   }, [activeBooking]);
+
+  const fetchDynamicPricing = useCallback(async () => {
+    if (!selectedVehicle) {
+      console.log("No vehicle selected, skipping price fetch");
+      return;
+    }
+    console.log(selectedVehicle);
+
+    // Ensure we're using the numeric ID
+    const vehicleId = Number(selectedVehicle.id);
+    if (isNaN(vehicleId)) {
+      console.error("Invalid vehicle ID:", selectedVehicle.id);
+      return;
+    }
+
+    setPricingLoading(true);
+    try {
+      console.log(
+        `Fetching prices for vehicle type: ${vehicleId} (${selectedVehicle.name})`,
+      );
+
+      // Fetch all pricing for this vehicle type
+      const { data } = await api.get(`/services/pricing/vehicle/${vehicleId}`);
+
+      console.log("Received pricing data:", data);
+
+      // Create maps for quick lookup
+      const priceMap = new Map<string, number>();
+      const detailsMap = new Map<string, any>();
+
+      if (data && Array.isArray(data)) {
+        data.forEach((pricingItem: any) => {
+          // Access the joined service data
+          const serviceName = pricingItem.services?.name;
+          if (serviceName) {
+            priceMap.set(serviceName, pricingItem.price);
+            detailsMap.set(serviceName, {
+              price: pricingItem.price,
+              notes: pricingItem.notes,
+              serviceId: pricingItem.service_id,
+              pricingId: pricingItem.id,
+            });
+          }
+        });
+      }
+
+      setServicePrices(priceMap);
+      setPriceDetails(detailsMap);
+
+      console.log("Price maps created:", {
+        servicesWithPrices: Array.from(priceMap.keys()),
+        priceMapSize: priceMap.size,
+      });
+    } catch (error: any) {
+      console.error(
+        "Failed to fetch dynamic pricing:",
+        error?.response?.data || error,
+      );
+
+      // Fallback to base prices
+      const fallbackMap = new Map<string, number>();
+      services.forEach((service) => {
+        fallbackMap.set(service.name, service.base_price);
+      });
+      setServicePrices(fallbackMap);
+
+      // Show user-friendly error
+      Alert.alert(
+        "Pricing Unavailable",
+        "Unable to fetch pricing for this vehicle. Using base prices.",
+      );
+    } finally {
+      setPricingLoading(false);
+    }
+  }, [selectedVehicle, services]);
+  useEffect(() => {
+    if (selectedVehicle && services.length > 0) {
+      fetchDynamicPricing();
+    }
+  }, [selectedVehicle, services, fetchDynamicPricing]);
 
   const fetchCurrentLocation = async () => {
     try {
@@ -680,7 +717,7 @@ export default function CustomerScreen() {
       longitude: location.longitude,
     });
   };
-
+console.log(services)
   async function createBooking(service: ServiceItem) {
     const locationToUse =
       selectedLocation ||
@@ -712,7 +749,15 @@ export default function CustomerScreen() {
 
     setCreatingBooking(true);
     setSelectedService(service);
-    console.log(selectedVehicle);
+    const dynamicPrice = servicePrices.get(service.name);
+    const finalAmount = dynamicPrice || service.base_price;
+    const priceInfo = priceDetails.get(service.name);
+    console.log(
+      `Creating booking for ${service.name} with vehicle ${selectedVehicle.name}`,
+    );
+    console.log(
+      `Price: Base=${service.base_price}, Dynamic=${dynamicPrice}, Final=${finalAmount}`,
+    );
     try {
       const payload = {
         customerId: user?.id,
@@ -726,7 +771,8 @@ export default function CustomerScreen() {
         savedLocationId: locationToUse?.savedLocationId,
         vehicle_type: selectedVehicle.category,
         vehicle_model: selectedVehicle.id,
-        amount : selectedService?.base_price
+        amount: finalAmount,
+        service_pricing_id: priceInfo?.pricingId,
       };
 
       const { data } = await api.post("/bookings", payload);
@@ -1694,6 +1740,25 @@ export default function CustomerScreen() {
               }}
               selectedVehicle={selectedVehicle}
             />
+            {selectedVehicle && (
+              <View style={styles.pricingInfoBanner}>
+                <Ionicons name="information-circle" size={20} color="#3B82F6" />
+                <Text style={styles.pricingInfoText}>
+                  Showing prices for {selectedVehicle.name}
+                  {pricingLoading && " (Loading...)"}
+                </Text>
+              </View>
+            )}
+
+            {!selectedVehicle && (
+              <View style={styles.warningBanner}>
+                <Ionicons name="warning" size={20} color="#F59E0B" />
+                <Text style={styles.warningText}>
+                  Please select a vehicle type to see accurate pricing
+                </Text>
+              </View>
+            )}
+
             <Text style={styles.sectionTitle}>Choose Service</Text>
           </View>
         }
@@ -1702,6 +1767,10 @@ export default function CustomerScreen() {
             item={item}
             onPress={() => createBooking(item)}
             disabled={creatingBooking || !!activeBooking}
+            selectedVehicle={selectedVehicle} // ✅ Pass selectedVehicle
+            dynamicPrice={servicePrices.get(item.name)} // ✅ Pass dynamic price
+            loading={pricingLoading} // ✅ Pass loading state
+            priceNote={priceDetails.get(item.name)?.notes} // ✅ Pass price notes
           />
         )}
         showsVerticalScrollIndicator={false}
@@ -1937,6 +2006,38 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 12,
+  },
+  pricingInfoBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#EFF6FF",
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+  },
+  pricingInfoText: {
+    fontSize: 13,
+    color: "#1E40AF",
+    marginLeft: 8,
+    flex: 1,
+  },
+  warningBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FEF3C7",
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#FDE68A",
+  },
+  warningText: {
+    fontSize: 13,
+    color: "#92400E",
+    marginLeft: 8,
+    flex: 1,
   },
   trackingInfoLabel: {
     fontSize: 14,

@@ -7,7 +7,7 @@ import http from "http";
 import { Server } from "socket.io";
 import { env } from "./config/env";
 import { servicesRouter } from "./routes/services.routes";
-import { bookingsRouter } from "./routes/bookings.routes";
+import { bookingsRouter } from "./routes/bookings.routes";  
 import { mechanicsRouter } from "./routes/mechanics.routes";
 import { initSocket } from "./socket";
 import cookieParser from "cookie-parser";

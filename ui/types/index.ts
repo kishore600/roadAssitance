@@ -55,3 +55,10 @@ export interface Mechanic {
     current_lng: number | null;
     distance?: number;
 }
+
+export interface VehicleType {
+  id: number;  // Make sure this is number, not string
+  name: string;
+  category: string;
+  display_order: number;
+}
