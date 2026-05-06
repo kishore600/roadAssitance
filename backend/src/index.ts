@@ -14,7 +14,7 @@ import cookieParser from "cookie-parser";
 import { authMiddleware } from "./middleware/auth";
 import { authRouter } from "./routes/auth.routes";
 import savedLocationRouter from "./routes/savedLocations.routes";
-
+import profileRoutes from './routes/profile.routes'
 const app = express();
 app.use(cookieParser());
 const server = http.createServer(app);
@@ -52,6 +52,8 @@ app.use("/api/auth", authRouter);
 app.use("/api/bookings", authMiddleware, bookingsRouter);
 app.use("/api/mechanics", authMiddleware, mechanicsRouter);
 app.use("/api/location", authMiddleware, savedLocationRouter);
+app.use("/api/profile", authMiddleware, profileRoutes);
+
 app.post("/api/directions", async (req, res) => {
   try {
     const { origin, destination } = req.body;

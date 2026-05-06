@@ -92,7 +92,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "#FFF",
+    // backgroundColor: "#FFF",
     borderRadius: 12,
     marginBottom: 12,
     padding: 16,

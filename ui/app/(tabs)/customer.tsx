@@ -1766,7 +1766,7 @@ console.log(services)
           <ServiceCard
             item={item}
             onPress={() => createBooking(item)}
-            disabled={creatingBooking || !!activeBooking}
+            disabled={creatingBooking || !!activeBooking || !selectedVehicle}
             selectedVehicle={selectedVehicle} // ✅ Pass selectedVehicle
             dynamicPrice={servicePrices.get(item.name)} // ✅ Pass dynamic price
             loading={pricingLoading} // ✅ Pass loading state

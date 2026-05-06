@@ -2,7 +2,7 @@
   "expo": {
     "name": "Moto108",
     "slug": "moto-108",
-    "version": "1.0.0",
+    "version": "3.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "ui",
@@ -46,12 +46,12 @@
       "typedRoutes": true,
       "reactCompiler": true
     },
+    "owner": "kishorenaresh",
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "e99f7e6a-208a-417e-bfa6-87511cd96ef9"
+        "projectId": "7efd840f-9b82-42ac-be32-dde0587484a4"
       }
-    },
-    "owner": "kishorenaresh"
+    }
   }
 }

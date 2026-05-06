@@ -10,7 +10,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
     token = authHeader.substring(7);
     console.log('✅ Token found in Authorization header');
   }
-  
+  console.log(token)
   // If not in header, check cookies as fallback
   if (!token && req.cookies.token) {
     token = req.cookies.token;
