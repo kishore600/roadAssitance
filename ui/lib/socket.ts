@@ -4,9 +4,7 @@ import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { api } from './api';
 
-const SOCKET_URL = Platform.OS === 'android' 
-  ? `${process.env.EXPO_PUBLIC_API_URL}` // Android emulator
-  : `http://localhost:3000`; // iOS or web
+const SOCKET_URL = process.env.EXPO_PUBLIC_API_URL
 
 class SocketService {
   private socket: Socket | null = null;
