@@ -17,7 +17,7 @@ class SocketService {
 
   private initSocket() {
     this.socket = io(SOCKET_URL, {
-      transports: ['websocket'],
+      transports: ['polling', 'websocket'],
       autoConnect: true,
       reconnection: true,
       reconnectionAttempts: 5,
