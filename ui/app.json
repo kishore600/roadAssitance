@@ -2,7 +2,7 @@
   "expo": {
     "name": "Moto108",
     "slug": "moto-108",
-    "version": "6.0.0",
+    "version": "9.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "ui",

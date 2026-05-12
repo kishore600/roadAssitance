@@ -1,30 +1,47 @@
-// lib/socket.ts - Updated with user room joining and better event handling
+// lib/socket.ts
 import io, { Socket } from 'socket.io-client';
-import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
-import { api } from './api';
 
-const SOCKET_URL = process.env.EXPO_PUBLIC_API_URL
+const SOCKET_URL = process.env.EXPO_PUBLIC_API_URL;
 
 class SocketService {
   private socket: Socket | null = null;
   private userId: string | null = null;
   private eventListeners: Map<string, Set<Function>> = new Map();
+  private isInitialized: boolean = false;
+  private connectionTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
+    if (!SOCKET_URL) {
+      console.error('❌ SOCKET_URL is undefined. Check EXPO_PUBLIC_API_URL in eas.json env block.');
+      return; // Don't crash — just skip init
+    }
     this.initSocket();
   }
 
   private initSocket() {
-    this.socket = io(SOCKET_URL, {
-      transports: ['polling', 'websocket'],
-      autoConnect: true,
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-    });
+    if (this.isInitialized && this.socket) return;
 
-    this.setupEventHandlers();
+    try {
+      this.socket = io(SOCKET_URL!, {
+        transports: ['polling', 'websocket'], // polling first — more reliable on cold starts
+        autoConnect: false,                   // don't connect until we explicitly call .connect()
+        reconnection: true,
+        reconnectionAttempts: 10,
+        reconnectionDelay: 2000,
+        reconnectionDelayMax: 10000,
+        timeout: 20000,                       // 20s timeout for Render cold starts
+        forceNew: false,
+      });
+
+      this.setupEventHandlers();
+      this.isInitialized = true;
+
+      // Connect after setup — not during constructor
+      this.socket.connect();
+    } catch (error) {
+      console.error('❌ Failed to initialize socket:', error);
+    }
   }
 
   private setupEventHandlers() {
@@ -32,25 +49,42 @@ class SocketService {
 
     this.socket.on('connect', () => {
       console.log('✅ Socket connected:', this.socket?.id);
+      if (this.connectionTimeout) {
+        clearTimeout(this.connectionTimeout);
+        this.connectionTimeout = null;
+      }
       this.joinUserRoom();
     });
 
-    this.socket.on('disconnect', () => {
-      console.log('❌ Socket disconnected');
+    this.socket.on('disconnect', (reason) => {
+      console.log('❌ Socket disconnected. Reason:', reason);
+      // If server disconnected us, manually reconnect
+      if (reason === 'io server disconnect' && this.socket) {
+        this.socket.connect();
+      }
     });
 
     this.socket.on('connect_error', (error) => {
-      console.error('Socket connection error:', error);
+      console.error('⚠️ Socket connection error:', error?.message || error);
+      // Don't throw — just log. App should not crash on socket failure.
     });
 
     this.socket.on('reconnect', (attemptNumber) => {
-      console.log(`Socket reconnected after ${attemptNumber} attempts`);
+      console.log(`🔄 Socket reconnected after ${attemptNumber} attempts`);
       this.joinUserRoom();
     });
 
-    // Handle all booking events
+    this.socket.on('reconnect_error', (error) => {
+      console.error('⚠️ Reconnect error:', error?.message || error);
+    });
+
+    this.socket.on('reconnect_failed', () => {
+      console.error('❌ All reconnect attempts failed.');
+    });
+
+    // Booking events — all route through emitEvent safely
     this.socket.on('booking:accepted', (data) => {
-      console.log('📱 Booking accepted event:', data);
+      console.log('📱 Booking accepted:', data);
       this.emitEvent('booking:accepted', data);
     });
 
@@ -60,17 +94,21 @@ class SocketService {
     });
 
     this.socket.on('mechanic:location:update', (data) => {
-      console.log('📱 Mechanic location update:', data);
+      console.log('📍 Mechanic location update:', data);
       this.emitEvent('mechanic:location:update', data);
     });
 
+    this.socket.on('mechanic:location:updated', (data) => {
+      this.emitEvent('mechanic:location:update', data); // normalize both event names
+    });
+
     this.socket.on('service:completed', (data) => {
-      console.log('✅ Service completed event:', data);
+      console.log('✅ Service completed:', data);
       this.emitEvent('service:completed', data);
     });
 
     this.socket.on('booking:new', (data) => {
-      console.log('📱 New booking event:', data);
+      console.log('📱 New booking:', data);
       this.emitEvent('booking:new', data);
     });
 
@@ -79,29 +117,39 @@ class SocketService {
       this.emitEvent('request:mechanic:location', data);
     });
 
-     this.socket.on('otp:verified', (data) => {
-    console.log('🔐 OTP verified event:', data);
-    this.emitEvent('otp:verified', data);
-  });
+    this.socket.on('otp:verified', (data) => {
+      console.log('🔐 OTP verified:', data);
+      this.emitEvent('otp:verified', data);
+    });
   }
-  
-    public emitOtpVerified(bookingId: string) {
-    if (this.socket && bookingId) {
-      this.socket.emit('otp:verified', { bookingId });
-      console.log(`📤 Emitted otp:verified for booking: ${bookingId}`);
+
+  // Safe emit — never crashes if socket not ready
+  private safeEmit(event: string, data?: any) {
+    if (!this.socket) {
+      console.warn(`⚠️ Socket not initialized. Cannot emit: ${event}`);
+      return;
     }
+    if (!this.socket.connected) {
+      console.warn(`⚠️ Socket not connected. Queuing emit: ${event}`);
+      // Attempt reconnect and retry once connected
+      this.socket.once('connect', () => {
+        this.socket?.emit(event, data);
+      });
+      this.socket.connect();
+      return;
+    }
+    this.socket.emit(event, data);
   }
 
   private async joinUserRoom() {
     try {
-      // Get user from secure storage
       const userStr = await SecureStore.getItemAsync('user');
       if (userStr) {
         const user = JSON.parse(userStr);
-        if (user?.id && this.socket) {  
+        if (user?.id) {
           this.userId = user.id;
-          this.socket.emit('user:join', user.id);
-          console.log(`User ${user.id} joined their personal room`);
+          this.safeEmit('user:join', user.id);
+          console.log(`👤 User ${user.id} joined personal room`);
         }
       }
     } catch (error) {
@@ -109,184 +157,175 @@ class SocketService {
     }
   }
 
-  // Set user ID manually (call after login)
   public async setUser(userId: string) {
     this.userId = userId;
-    if (this.socket && this.socket.connected) {
-      this.socket.emit('user:join', userId);
-      console.log(`User ${userId} joined personal room`);
-    }
+    this.safeEmit('user:join', userId);
+    console.log(`👤 User ${userId} joined personal room`);
   }
 
-  // Clear user (call on logout)
   public clearUser() {
     this.userId = null;
   }
 
-  // Join a booking room
-  public joinBookingRoom(bookingId: string) {
-    if (this.socket && bookingId) {
-      this.socket.emit('join:booking', bookingId);
-      console.log(`Joined booking room: ${bookingId}`);
-    }
+  public joinBookingRoom(bookingId: string | null | undefined) {
+    if (!bookingId) return; // guard — prevents Hermes crash on undefined
+    this.safeEmit('join:booking', bookingId);
+    console.log(`Joined booking room: ${bookingId}`);
   }
 
-  // Leave a booking room
-  public leaveBookingRoom(bookingId: string) {
-    if (this.socket && bookingId) {
-      this.socket.emit('leave:booking', bookingId);
-      console.log(`Left booking room: ${bookingId}`);
-    }
+  public leaveBookingRoom(bookingId: string | null | undefined) {
+    if (!bookingId) return;
+    this.safeEmit('leave:booking', bookingId);
+    console.log(`Left booking room: ${bookingId}`);
   }
 
-  // Join mechanic room for tracking
-  public joinMechanicRoom(mechanicId: string) {
-    if (this.socket && mechanicId) {
-      this.socket.emit('join:mechanic', mechanicId);
-      console.log(`Joined mechanic room: ${mechanicId}`);
-    }
+  public joinMechanicRoom(mechanicId: string | null | undefined) {
+    if (!mechanicId) return;
+    this.safeEmit('join:mechanic', mechanicId);
+    console.log(`Joined mechanic room: ${mechanicId}`);
   }
 
-  // Send mechanic location update
-  public sendMechanicLocation(bookingId: string, location: { lat: number; lng: number }, eta: number, mechanicId?: string) {
-    if (this.socket && bookingId && location) {
-      const locationData = {
-        bookingId,
-        location: {
-          lat: location.lat,
-          lng: location.lng
-        },
-        eta,
-        mechanicId: mechanicId || this.userId,
-        timestamp: new Date().toISOString()
-      };
-      this.socket.emit('mechanic:location:update', locationData);
-      console.log('Sent mechanic location update:', locationData);
+  public sendMechanicLocation(
+    bookingId: string,
+    location: { lat: number; lng: number },
+    eta: number,
+    mechanicId?: string
+  ) {
+    if (!bookingId || !location) return;
+    if (typeof location.lat !== 'number' || typeof location.lng !== 'number') {
+      console.warn('⚠️ Invalid location data, skipping emit');
+      return;
     }
+    this.safeEmit('mechanic:location:update', {
+      bookingId,
+      location: { lat: location.lat, lng: location.lng },
+      eta,
+      mechanicId: mechanicId || this.userId,
+      timestamp: new Date().toISOString(),
+    });
   }
 
-  // Request mechanic location (customer)
-  public requestMechanicLocation(bookingId: string) {
-    if (this.socket && bookingId) {
-      this.socket.emit('customer:request:mechanic:location', { bookingId });
-      console.log(`Requested mechanic location for booking: ${bookingId}`);
-    }
+  public requestMechanicLocation(bookingId: string | null | undefined) {
+    if (!bookingId) return;
+    this.safeEmit('customer:request:mechanic:location', { bookingId });
+    console.log(`Requested mechanic location for booking: ${bookingId}`);
   }
 
-  // Accept booking (mechanic)
   public acceptBooking(bookingId: string, mechanic: any, eta: number = 15) {
-    if (this.socket && bookingId) {
-      this.socket.emit('booking:accept', {
-        bookingId,
-        mechanic,
-        eta
-      });
-      console.log(`Accepted booking: ${bookingId}`);
-    }
+    if (!bookingId) return;
+    this.safeEmit('booking:accept', { bookingId, mechanic, eta });
   }
 
-  // Update booking status
   public updateBookingStatus(bookingId: string, status: string, mechanicLocation?: any) {
-    if (this.socket && bookingId) {
-      this.socket.emit('booking:status:update', {
-        bookingId,
-        status,
-        timestamp: new Date().toISOString(),
-        mechanicLocation
-      });
-      console.log(`Updated booking ${bookingId} status to: ${status}`);
-    }
+    if (!bookingId) return;
+    this.safeEmit('booking:status:update', {
+      bookingId,
+      status,
+      timestamp: new Date().toISOString(),
+      mechanicLocation,
+    });
   }
 
-  // Complete booking with OTP
-  public completeBooking(bookingId: string, customerId?: string, mechanicId?: string, mechanicName?: string, customerName?: string) {
-    if (this.socket && bookingId) {
-      this.socket.emit('booking:complete', {
-        bookingId,
-        completedAt: new Date().toISOString(),
-        customerId,
-        mechanicId,
-        mechanicName,
-        customerName
-      });
-      console.log(`Completed booking: ${bookingId}`);
-    }
+  public completeBooking(
+    bookingId: string,
+    customerId?: string,
+    mechanicId?: string,
+    mechanicName?: string,
+    customerName?: string
+  ) {
+    if (!bookingId) return;
+    this.safeEmit('booking:complete', {
+      bookingId,
+      completedAt: new Date().toISOString(),
+      customerId,
+      mechanicId,
+      mechanicName,
+      customerName,
+    });
   }
 
-  // Emit new booking (backend)
   public emitNewBooking(bookingData: any) {
-    if (this.socket) {
-      this.socket.emit('booking:new', bookingData);
-      console.log('Emitted new booking:', bookingData.id);
-    }
+    if (!bookingData) return;
+    this.safeEmit('booking:new', bookingData);
+  }
+
+  public emitOtpVerified(bookingId: string | null | undefined) {
+    if (!bookingId) return;
+    this.safeEmit('otp:verified', { bookingId });
+    console.log(`📤 Emitted otp:verified for booking: ${bookingId}`);
   }
 
   // Event listener management
   public on(event: string, callback: Function) {
+    if (!event || typeof callback !== 'function') return;
     if (!this.eventListeners.has(event)) {
       this.eventListeners.set(event, new Set());
     }
     this.eventListeners.get(event)?.add(callback);
-    
-    if (this.socket) {
-      this.socket.on(event, callback as any);
-    }
   }
 
   public off(event: string, callback?: Function) {
+    if (!event) return;
     if (callback) {
       this.eventListeners.get(event)?.delete(callback);
-      if (this.socket) {
-        this.socket.off(event, callback as any);
-      }
     } else {
       this.eventListeners.delete(event);
-      if (this.socket) {
-        this.socket.off(event);
-      }
     }
   }
 
   private emitEvent(event: string, data: any) {
-    const callbacks = this.eventListeners.get(event);
-    if (callbacks) {
-      callbacks.forEach(callback => callback(data));
+    try {
+      const callbacks = this.eventListeners.get(event);
+      if (callbacks && callbacks.size > 0) {
+        callbacks.forEach((callback) => {
+          try {
+            callback(data);
+          } catch (err) {
+            console.error(`❌ Error in listener for "${event}":`, err);
+          }
+        });
+      }
+    } catch (error) {
+      console.error(`❌ emitEvent failed for "${event}":`, error);
     }
   }
 
-  // Check connection status
   public isConnected(): boolean {
-    return this.socket?.connected || false;
+    return this.socket?.connected ?? false;
   }
 
-  // Disconnect socket
   public disconnect() {
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
+    }
     if (this.socket) {
+      this.socket.removeAllListeners();
       this.socket.disconnect();
       this.socket = null;
+      this.isInitialized = false;
     }
   }
 
-  // Reconnect socket
   public reconnect() {
+    if (!SOCKET_URL) return;
     if (!this.socket || !this.socket.connected) {
-      this.initSocket();
+      if (!this.isInitialized) {
+        this.initSocket();
+      } else {
+        this.socket?.connect();
+      }
     }
   }
 
-  // Get socket instance (for debugging)
   public getSocket(): Socket | null {
     return this.socket;
   }
 }
 
-// Create singleton instance
 export const socketService = new SocketService();
-
-// Export socket for backward compatibility
 export const socket = socketService;
 
-// Helper hook for components
 export function useSocket() {
   return socketService;
 }

@@ -68,7 +68,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
         formatted_address: string;
     } | null>(null);
     
-    const debounceTimer = useRef<NodeJS.Timeout | null>(null);
+    const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
