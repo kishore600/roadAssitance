@@ -2,7 +2,7 @@
   "expo": {
     "name": "Moto108",
     "slug": "moto-108",
-    "version": "9.0.0",
+    "version": "14.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "ui",
@@ -13,6 +13,18 @@
     },
     "android": {
       "package": "com.moto108.emergency",
+      "versionCode": 14,
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDwLkPpLwhKZfnkZ1e3W_cdg78xfS6fvfM"
+        }
+      },
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "INTERNET",
+        "VIBRATE"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -40,7 +52,16 @@
           }
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Moto108 needs your location to find nearby mechanics.",
+          "locationAlwaysPermission": "Moto108 needs background location to track your mechanic.",
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

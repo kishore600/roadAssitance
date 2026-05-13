@@ -6,13 +6,37 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://xaznvuwkmsitdejavasp.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhhem52dXdrbXNpdGRlamF2YXNwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTkwOTIzOCwiZXhwIjoyMDkxNDg1MjM4fQ.9292DH_1zlLFd9jLNmXS7UAYFbxwR4SqNmNG4P_KpK8",
+        "EXPO_PUBLIC_API_URL": "https://moto108.onrender.com",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyDwLkPpLwhKZfnkZ1e3W_cdg78xfS6fvfM"
+      }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+       "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://xaznvuwkmsitdejavasp.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhhem52dXdrbXNpdGRlamF2YXNwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTkwOTIzOCwiZXhwIjoyMDkxNDg1MjM4fQ.9292DH_1zlLFd9jLNmXS7UAYFbxwR4SqNmNG4P_KpK8",
+        "EXPO_PUBLIC_API_URL": "https://moto108.onrender.com",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyDwLkPpLwhKZfnkZ1e3W_cdg78xfS6fvfM"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+       "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://xaznvuwkmsitdejavasp.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhhem52dXdrbXNpdGRlamF2YXNwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTkwOTIzOCwiZXhwIjoyMDkxNDg1MjM4fQ.9292DH_1zlLFd9jLNmXS7UAYFbxwR4SqNmNG4P_KpK8",
+        "EXPO_PUBLIC_API_URL": "https://moto108.onrender.com",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyDwLkPpLwhKZfnkZ1e3W_cdg78xfS6fvfM"
+      }
     }
   },
   "submit": {
