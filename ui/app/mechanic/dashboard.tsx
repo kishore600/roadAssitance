@@ -635,44 +635,110 @@
       setShowAcceptModal(true);
     }
 
-    async function confirmAcceptJob() {
-      if (!selectedBooking) return;
+  async function confirmAcceptJob() {
+  if (!selectedBooking) return;
 
-      setAccepting(true);
-      try {
-        await api.patch(`/bookings/${selectedBooking.id}/assign`, {
-          mechanicId: user?.id,
-          etaMinutes: 15,
-          status: "accepted",
-        });
+  setAccepting(true);
+  try {
+    // Make API call to assign mechanic
+    const response = await api.patch(`/bookings/${selectedBooking.id}/assign`, {
+      mechanicId: user?.id,
+      etaMinutes: 15,
+      status: "accepted",
+    });
 
-        socketService.acceptBooking(
-          selectedBooking.id,
-          {
-            id: user?.id,
-            full_name: user?.full_name,
-            phone: user?.phone,
-          },
-          15,
-        );
+    // If API call is successful, emit socket event
+    socketService.acceptBooking(
+      selectedBooking.id,
+      {
+        id: user?.id,
+        full_name: user?.full_name,
+        phone: user?.phone,
+      },
+      15,
+    );
 
-        socketService.joinBookingRoom(selectedBooking.id);
+    socketService.joinBookingRoom(selectedBooking.id);
 
-        Alert.alert(
-          "✓ Accepted!",
-          "You have accepted the job. Navigate to the customer's location now.",
-        );
+    Alert.alert(
+      "✓ Accepted!",
+      "You have accepted the job. Navigate to the customer's location now.",
+    );
 
-        setShowAcceptModal(false);
-        await Promise.all([loadOpenJobs(), loadMyJobs()]);
-      } catch (error) {
-        console.error("Failed to accept job:", error);
-        Alert.alert("Error", "Failed to accept job");
-      } finally {
-        setAccepting(false);
-        setSelectedBooking(null);
-      }
+    setShowAcceptModal(false);
+    await Promise.all([loadOpenJobs(), loadMyJobs()]);
+    
+    // Remove the booking from available jobs list immediately
+    setJobs(prevJobs => prevJobs.filter(job => job.id !== selectedBooking.id));
+    
+  } catch (error: any) {
+    console.error("Failed to accept job:", error);
+    
+    // Handle specific error responses from backend
+    if (error.response?.status === 409) {
+      Alert.alert(
+        "Already Accepted",
+        "This service request has already been accepted by another mechanic.",
+      );
+      // Refresh jobs to remove the already taken booking
+      await loadOpenJobs();
+    } else {
+      Alert.alert("Error", error.response?.data?.error || "Failed to accept job");
     }
+  } finally {
+    setAccepting(false);
+    setSelectedBooking(null);
+  }
+}
+
+
+// Add this useEffect to listen for booking taken events
+useEffect(() => {
+  // Listen for when a booking is taken by another mechanic
+  const handleBookingTaken = (data: { bookingId: string; mechanicId: string; message: string }) => {
+    console.log("Booking taken by another mechanic:", data);
+    
+    // Remove the taken booking from available jobs if it exists
+    setJobs(prevJobs => prevJobs.filter(job => job.id !== data.bookingId));
+    
+    // Show alert if this was the booking the mechanic was viewing
+    if (selectedBooking?.id === data.bookingId) {
+      Alert.alert(
+        "Booking Taken",
+        "This service request has been accepted by another mechanic.",
+        [
+          {
+            text: "OK",
+            onPress: () => {
+              setShowAcceptModal(false);
+              setSelectedBooking(null);
+            }
+          }
+        ]
+      );
+    }
+  };
+
+  // Listen for booking accept errors
+  const handleBookingAcceptError = (data: { bookingId: string; error: string; alreadyAssigned?: boolean }) => {
+    if (data.alreadyAssigned) {
+      Alert.alert(
+        "Already Accepted",
+        data.error || "This service request has already been accepted by another mechanic.",
+      );
+      // Refresh available jobs
+      loadOpenJobs();
+    }
+  };
+
+  socketService.onBookingTaken(handleBookingTaken);
+  socketService.onBookingAcceptError(handleBookingAcceptError);
+
+  return () => {
+    socketService.off('booking:taken');
+    socketService.off('booking:accept:error');
+  };
+}, [selectedBooking]);
 
     async function handleLogout() {
       Alert.alert("Logout", "Are you sure you want to logout?", [

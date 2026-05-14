@@ -72,12 +72,40 @@ bookingsRouter.get("/open", async (_req, res) => {
 });
 
 bookingsRouter.patch("/:bookingId/assign", async (req, res) => {
-  const data = await assignMechanic(
-    req.params.bookingId,
-    req.body.mechanicId,
-    req.body.etaMinutes || 15,
-  );
-  res.json(data);
+  try {
+    const { bookingId } = req.params;
+    const { mechanicId, etaMinutes = 15 } = req.body;
+
+    // Validate input
+    if (!mechanicId) {
+      return res.status(400).json({ error: "Mechanic ID is required" });
+    }
+
+    // Call the updated assignMechanic function with validation
+    const data = await assignMechanic(bookingId, mechanicId, etaMinutes);
+    res.json(data);
+  } catch (error: any) {
+    console.error("Error assigning mechanic:", error);
+    
+    // Handle specific error types
+    if (error.message === "Booking not found") {
+      return res.status(404).json({ error: error.message });
+    }
+    if (error.message === "Booking already assigned to a mechanic") {
+      return res.status(409).json({ 
+        error: error.message,
+        alreadyAssigned: true 
+      });
+    }
+    if (error.message === "Booking is not in requested status") {
+      return res.status(409).json({ 
+        error: error.message,
+        invalidStatus: true 
+      });
+    }
+    
+    res.status(500).json({ error: "Failed to assign mechanic" });
+  }
 });
 
 bookingsRouter.patch("/:bookingId/status", async (req, res) => {

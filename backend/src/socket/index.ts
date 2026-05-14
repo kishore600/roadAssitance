@@ -1,11 +1,11 @@
-// server/socket.js - Fixed version with OTP verification
+// server/socket.js - Fixed version with OTP verification and duplicate acceptance prevention
 import { Server } from 'socket.io';
 
 let io:any;
 
 export function initSocket(server:any) {
   io = server;
-  
+
   io.on('connection', (socket:any) => {
     console.log('User connected:', socket.id);
 
@@ -33,12 +33,53 @@ export function initSocket(server:any) {
       }
     });
 
-    // Handle mechanic accepting booking
-    socket.on('booking:accept', (data:any) => {
+    // Handle mechanic accepting booking - WITH DUPLICATE CHECK
+    socket.on('booking:accept', async (data:any) => {
       const { bookingId, mechanic, eta } = data;
-      console.log(`Booking accepted: ${bookingId} by mechanic ${mechanic?.id}`);
-      
-      if (bookingId) {
+      console.log(`Booking acceptance requested: ${bookingId} by mechanic ${mechanic?.id}`);
+
+      if (!bookingId) return;
+
+      try {
+        // Check if booking is already accepted/completed/cancelled
+        // You'll need to query your database here
+        // This is a mock - implement with your actual DB query
+        const booking:any = await getBookingById(bookingId); // Implement this function
+        
+        if (!booking) {
+          console.log(`Booking ${bookingId} not found`);
+          socket.emit('booking:accept:error', { 
+            bookingId, 
+            error: 'Booking not found' 
+          });
+          return;
+        }
+
+        // Check if booking is still in 'requested' status
+        if (booking.status !== 'requested') {
+          console.log(`Booking ${bookingId} is already ${booking.status}`);
+          socket.emit('booking:accept:error', { 
+            bookingId, 
+            error: `Booking is already ${booking.status}`,
+            status: booking.status
+          });
+          return;
+        }
+
+        // Check if booking already has a mechanic assigned
+        if (booking.mechanic_id) {
+          console.log(`Booking ${bookingId} already assigned to mechanic ${booking.mechanic_id}`);
+          socket.emit('booking:accept:error', { 
+            bookingId, 
+            error: 'This service request has already been accepted by another mechanic',
+            alreadyAssigned: true
+          });
+          return;
+        }
+
+        // If all checks pass, emit acceptance events
+        console.log(`Booking ${bookingId} accepted by mechanic ${mechanic?.id}`);
+
         // Emit to customer who requested this booking
         io.to(`booking:${bookingId}`).emit('booking:accepted', {
           booking: { 
@@ -49,7 +90,7 @@ export function initSocket(server:any) {
           },
           mechanic: mechanic
         });
-        
+
         // Also emit general update
         io.to(`booking:${bookingId}`).emit('booking:updated', {
           id: bookingId,
@@ -57,14 +98,34 @@ export function initSocket(server:any) {
           mechanic_id: mechanic?.id,
           eta_minutes: eta || 15
         });
+
+        // Notify all other mechanics that this booking is no longer available
+        io.emit('booking:taken', { 
+          bookingId, 
+          mechanicId: mechanic?.id,
+          message: 'This service request has been accepted by another mechanic'
+        });
+
+        // Send success confirmation to the accepting mechanic
+        socket.emit('booking:accept:success', {
+          bookingId,
+          message: 'Booking accepted successfully'
+        });
+
+      } catch (error) {
+        console.error(`Error accepting booking ${bookingId}:`, error);
+        socket.emit('booking:accept:error', { 
+          bookingId, 
+          error: 'Failed to accept booking due to server error' 
+        });
       }
     });
 
-    // Handle status updates
+    // Handle status updates (with validation)
     socket.on('booking:status:update', (data:any) => {
       const { bookingId, status, timestamp, mechanicLocation } = data;
       console.log(`Booking status update: ${bookingId} -> ${status}`);
-      
+
       if (bookingId) {
         io.to(`booking:${bookingId}`).emit('booking:status:updated', {
           id: bookingId,
@@ -72,7 +133,7 @@ export function initSocket(server:any) {
           updated_at: timestamp || new Date().toISOString(),
           ...(mechanicLocation && { mechanic_location: mechanicLocation })
         });
-        
+
         // If status is completed, emit specific completion event
         if (status === 'completed') {
           io.to(`booking:${bookingId}`).emit('service:completed', { 
@@ -86,9 +147,9 @@ export function initSocket(server:any) {
     // Handle real-time location updates from mechanic
     socket.on('mechanic:location:update', (data:any) => {
       const { bookingId, location, eta, mechanicId } = data;
-      
+
       console.log(`Received mechanic location update - Booking: ${bookingId}, Location:`, location);
-      
+
       if (bookingId && location) {
         // Ensure location has the correct format
         const locationData = {
@@ -101,7 +162,7 @@ export function initSocket(server:any) {
           timestamp: new Date().toISOString(),
           mechanicId: mechanicId
         };
-        
+
         // Emit to the specific booking room
         io.to(`booking:${bookingId}`).emit('mechanic:location:update', locationData);
         console.log(`Emitted location update to booking:${bookingId}`);
@@ -111,9 +172,9 @@ export function initSocket(server:any) {
     // Alternative event name that mechanics might be using
     socket.on('mechanic:location', (data:any) => {
       console.log('Received mechanic:location event:', data);
-      
+
       const { bookingId, location, eta, mechanicId } = data;
-      
+
       if (bookingId && location) {
         const locationData = {
           bookingId: bookingId,
@@ -125,7 +186,7 @@ export function initSocket(server:any) {
           timestamp: new Date().toISOString(),
           mechanicId: mechanicId
         };
-        
+
         io.to(`booking:${bookingId}`).emit('mechanic:location:update', locationData);
       }
     });
@@ -134,7 +195,7 @@ export function initSocket(server:any) {
     socket.on('otp:verified', (data:any) => {
       const { bookingId } = data;
       console.log(`🔐 OTP verified for booking: ${bookingId}`);
-      
+
       if (bookingId) {
         // Forward to the booking room so mechanic gets notified
         io.to(`booking:${bookingId}`).emit('otp:verified', { bookingId });
@@ -146,14 +207,14 @@ export function initSocket(server:any) {
     socket.on('booking:complete', (data:any) => {
       const { bookingId, completedAt, customerId, mechanicId, mechanicName, customerName } = data;
       console.log(`Booking completed: ${bookingId}`);
-      
+
       if (bookingId) {
         // Emit to booking room
         io.to(`booking:${bookingId}`).emit('service:completed', {
           bookingId: bookingId,
           completedAt: completedAt || new Date().toISOString()
         });
-        
+
         // Also emit to user rooms for direct notifications
         if (customerId) {
           io.to(`user:${customerId}`).emit('service:completed', {
@@ -162,7 +223,7 @@ export function initSocket(server:any) {
             completedAt: completedAt || new Date().toISOString()
           });
         }
-        
+
         if (mechanicId) {
           io.to(`user:${mechanicId}`).emit('service:completed', {
             bookingId: bookingId,
@@ -170,7 +231,7 @@ export function initSocket(server:any) {
             completedAt: completedAt || new Date().toISOString()
           });
         }
-        
+
         // Also emit general booking status update
         io.to(`booking:${bookingId}`).emit('booking:status:updated', {
           id: bookingId,
@@ -184,7 +245,7 @@ export function initSocket(server:any) {
     socket.on('customer:request:mechanic:location', (data:any) => {
       const { bookingId } = data;
       console.log(`Customer requested mechanic location for booking: ${bookingId}`);
-      
+
       if (bookingId) {
         io.to(`booking:${bookingId}`).emit('request:mechanic:location', {
           bookingId: bookingId,
@@ -204,22 +265,36 @@ export function initSocket(server:any) {
       console.log('User disconnected:', socket.id);
     });
   });
-  
+
   return io;
+}
+
+// Helper function to fetch booking from database
+// Implement this based on your database setup (Prisma, Sequelize, etc.)
+async function getBookingById(bookingId: string) {
+  // Example with Prisma (adjust based on your ORM)
+  // const booking = await prisma.booking.findUnique({
+  //   where: { id: bookingId },
+  //   select: { id: true, status: true, mechanic_id: true }
+  // });
+  // return booking;
+  
+  // Placeholder - replace with actual database query
+  return null;
 }
 
 // Helper functions to emit events from elsewhere in the app
 export function emitBookingUpdate(bookingId:any, data:any) {
   if (io) {
     io.to(`booking:${bookingId}`).emit('booking:status:updated', data);
-    
+
     // If booking is completed, emit specific completion event
     if (data.status === 'completed') {
       io.to(`booking:${bookingId}`).emit('service:completed', { 
         bookingId: bookingId,
         completedAt: new Date().toISOString()
       });
-      
+
       if (data.customer_id) {
         io.to(`user:${data.customer_id}`).emit('service:completed', {
           bookingId: bookingId,
@@ -227,7 +302,7 @@ export function emitBookingUpdate(bookingId:any, data:any) {
           completedAt: new Date().toISOString()
         });
       }
-      
+
       if (data.mechanic_id) {
         io.to(`user:${data.mechanic_id}`).emit('service:completed', {
           bookingId: bookingId,
