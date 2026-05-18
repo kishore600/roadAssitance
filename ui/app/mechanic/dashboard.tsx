@@ -24,7 +24,43 @@ import { useAuth } from "@/context/AuthContext";
 import { router } from "expo-router";
 import { socket, socketService } from "@/lib/socket";
 import { Ionicons } from "@expo/vector-icons";
-import { Audio } from "expo-av"; // Add this import
+import { Audio } from "expo-av";
+
+// Types
+interface Service {
+  id: string;
+  name: string;
+  description: string;
+  base_price: number;
+  category: string;
+  estimated_duration: number;
+}
+
+interface MechanicProfile {
+  id: string;
+  full_name: string;
+  email: string;
+  phone: string;
+  avatar_url?: string;
+  vehicle_type: string;
+  license_number: string;
+  experience_years: number;
+  bio: string;
+  services_offered: string[];
+  custom_prices: Record<string, number>;
+  is_verified: boolean;
+  rating: number;
+  total_jobs: number;
+  completion_rate: number;
+}
+
+interface ServiceStats {
+  service_id: string;
+  service_name: string;
+  total_completed: number;
+  total_earnings: number;
+  avg_rating: number;
+}
 
 // Distance calculation function
 function calculateDistance(
@@ -52,7 +88,7 @@ export default function MechanicDashboard() {
   const [online, setOnline] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<"available" | "myJobs">(
+  const [activeTab, setActiveTab] = useState<"available" | "myJobs" | "profile" | "analytics">(
     "available",
   );
   const [currentLocation, setCurrentLocation] = useState<{
@@ -75,12 +111,31 @@ export default function MechanicDashboard() {
     useState<any>(null);
   const [todayEarnings, setTodayEarnings] = useState(0);
   const [todaysJobsCount, setTodaysJobsCount] = useState(0);
-  const [isTrackingVisible, setIsTrackingVisible] = useState(false);
+  const [weeklyEarnings, setWeeklyEarnings] = useState(0);
+  const [monthlyEarnings, setMonthlyEarnings] = useState(0);
+  const [totalJobsCompleted, setTotalJobsCompleted] = useState(0);
+  const [serviceStats, setServiceStats] = useState<ServiceStats[]>([]);
   const [currentJob, setCurrentJob] = useState<any>(null);
   const [activeBooking, setActiveBooking] = useState<any | null>(null);
   const [otpVerifiedMap, setOtpVerifiedMap] = useState<{
     [key: string]: boolean;
   }>({});
+  
+  // Profile states
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [mechanicProfile, setMechanicProfile] = useState<MechanicProfile | null>(null);
+  const [availableServices, setAvailableServices] = useState<Service[]>([]);
+  const [selectedServices, setSelectedServices] = useState<string[]>([]);
+  const [customPrices, setCustomPrices] = useState<Record<string, string>>({});
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [profileForm, setProfileForm] = useState({
+    full_name: "",
+    phone: "",
+    vehicle_type: "",
+    license_number: "",
+    experience_years: "",
+    bio: "",
+  });
   
   // Sound related states
   const soundRef = useRef<Audio.Sound | null>(null);
@@ -91,17 +146,13 @@ export default function MechanicDashboard() {
   // Function to play beep sound
   const playBeepSound = async () => {
     try {
-      // Stop any currently playing sound
       if (soundRef.current) {
         await soundRef.current.stopAsync();
         await soundRef.current.unloadAsync();
         soundRef.current = null;
       }
 
-      // Create a beep sound using Audio API with a generated beep
-      // Method 1: Create a simple beep using Web Audio (alternative if you don't have sound file)
       if (Platform.OS === 'web') {
-        // For web platform
         const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
         const oscillator = audioContext.createOscillator();
         const gainNode = audioContext.createGain();
@@ -109,25 +160,21 @@ export default function MechanicDashboard() {
         oscillator.connect(gainNode);
         gainNode.connect(audioContext.destination);
         
-        oscillator.frequency.value = 800; // Beep frequency
-        gainNode.gain.value = 0.3; // Volume
+        oscillator.frequency.value = 800;
+        gainNode.gain.value = 0.3;
         
         oscillator.start();
         gainNode.gain.exponentialRampToValueAtTime(0.00001, audioContext.currentTime + 0.5);
         oscillator.stop(audioContext.currentTime + 0.5);
       } else {
-        // For mobile platforms - try to load sound file
         try {
-          // You can either use a local sound file or generate a beep
-          // Option 1: Use a local sound file (recommended)
           const { sound } = await Audio.Sound.createAsync(
-            require('@/assets/ring.mp3'), // Add your ring.mp3 file to assets folder
+            require('@/assets/ring.mp3'),
             { shouldPlay: true, volume: 1.0, isLooping: false }
           );
           soundRef.current = sound;
           await sound.playAsync();
           
-          // Listen for playback completion
           sound.setOnPlaybackStatusUpdate(async (status) => {
             if (status.isLoaded && status.didJustFinish) {
               await sound.unloadAsync();
@@ -136,10 +183,8 @@ export default function MechanicDashboard() {
           });
         } catch (fileError) {
           console.log("Sound file not found, using vibration fallback");
-          // Fallback to vibration if sound file doesn't exist
           Vibration.vibrate([500, 300, 500, 300, 1000]);
           
-          // Also try to play system beep using Audio.setIsEnabledAsync
           await Audio.setAudioModeAsync({
             playsInSilentModeIOS: true,
             staysActiveInBackground: true,
@@ -148,17 +193,14 @@ export default function MechanicDashboard() {
         }
       }
       
-      // Vibrate for better alert
       Vibration.vibrate([500, 300, 500]);
       
     } catch (error) {
       console.error("Failed to play beep sound:", error);
-      // Fallback to vibration only
       Vibration.vibrate([500, 300, 500]);
     }
   };
 
-  // Function to stop the beep sound
   const stopBeepSound = async () => {
     try {
       if (soundRef.current) {
@@ -172,7 +214,6 @@ export default function MechanicDashboard() {
     }
   };
 
-  // Clean up sound on component unmount
   useEffect(() => {
     return () => {
       if (soundRef.current) {
@@ -219,6 +260,18 @@ export default function MechanicDashboard() {
     }
   }
 
+  async function fetchAnalytics() {
+    try {
+      const { data } = await api.get(`/mechanics/${user?.id}/analytics`);
+      setWeeklyEarnings(data.weekly_earnings || 0);
+      setMonthlyEarnings(data.monthly_earnings || 0);
+      setTotalJobsCompleted(data.total_jobs || 0);
+      setServiceStats(data.service_stats || []);
+    } catch (error) {
+      console.error("Failed to fetch analytics:", error);
+    }
+  }
+
   async function generateOTPForCompletion(bookingId: string) {
     try {
       const response = await api.post(
@@ -244,7 +297,6 @@ export default function MechanicDashboard() {
     }
   }
 
-  // Listen for OTP verification from customer
   useEffect(() => {
     const handleOtpVerified = (data: { bookingId: string }) => {
       console.log("✅ OTP verified event received in mechanic:", data);
@@ -297,6 +349,7 @@ export default function MechanicDashboard() {
       setCustomerReview("");
       loadMyJobs();
       fetchTodayEarnings();
+      fetchAnalytics();
     } catch (error: any) {
       Alert.alert(
         "Error",
@@ -346,6 +399,7 @@ export default function MechanicDashboard() {
           );
         }
         await fetchTodayEarnings();
+        await fetchAnalytics();
         setShowOTPModal(false);
         setGeneratedOTP("");
         setOtpVerifiedMap((prev) => ({ ...prev, [bookingId]: false }));
@@ -452,12 +506,14 @@ export default function MechanicDashboard() {
     }
   }, [myJobs, online]);
 
-  // Modified useEffect for new booking with beep sound
   useEffect(() => {
     if (user) {
       loadData();
       getCurrentLocation();
       fetchTodayEarnings();
+      fetchAnalytics();
+      loadMechanicProfile();
+      loadAvailableServices();
     }
 
     socket.on("booking:new", async (booking: any) => {
@@ -469,10 +525,8 @@ export default function MechanicDashboard() {
         return;
       }
 
-      // Play beep sound when new booking arrives
       await playBeepSound();
 
-      // Show alert with sound
       Alert.alert(
         "🔔 New Service Request!",
         `A customer needs ${booking.service?.name || "assistance"}. Tap to view details.\n\nVehicle: ${booking.vehicle_type} - ${booking.vehicle_model}\nDistance: ${booking.distance ? booking.distance.toFixed(1) : 'Calculating...'} km away`,
@@ -480,7 +534,7 @@ export default function MechanicDashboard() {
           {
             text: "View Now",
             onPress: async () => {
-              await stopBeepSound(); // Stop sound when viewing
+              await stopBeepSound();
               setActiveTab("available");
               loadOpenJobs();
             },
@@ -489,7 +543,7 @@ export default function MechanicDashboard() {
             text: "Ignore", 
             style: "cancel",
             onPress: async () => {
-              await stopBeepSound(); // Stop sound when ignoring
+              await stopBeepSound();
             }
           },
         ],
@@ -501,7 +555,7 @@ export default function MechanicDashboard() {
 
     return () => {
       socket.off("booking:new");
-      stopBeepSound(); // Clean up sound on unmount
+      stopBeepSound();
     };
   }, [user]);
 
@@ -558,116 +612,67 @@ export default function MechanicDashboard() {
     }
   }
 
-  const openGoogleMapsNavigation = async (
-    customerLat: number,
-    customerLng: number,
-    customerAddress: string,
-  ) => {
+  async function loadMechanicProfile() {
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert(
-          "Permission Denied",
-          "Please enable location permissions to use navigation.",
-        );
-        return;
+      const { data } = await api.get(`/mechanics/${user?.id}/profile`);
+      setMechanicProfile(data);
+      setSelectedServices(data.services_offered || []);
+      
+      // Initialize custom prices
+      const prices: Record<string, string> = {};
+      if (data.custom_prices) {
+        Object.entries(data.custom_prices).forEach(([key, value]:any) => {
+          prices[key] = value.toString();
+        });
       }
+      setCustomPrices(prices);
+      
+      // Initialize profile form
+      setProfileForm({
+        full_name: data.full_name || "",
+        phone: data.phone || "",
+        vehicle_type: data.vehicle_type || "",
+        license_number: data.license_number || "",
+        experience_years: data.experience_years?.toString() || "",
+        bio: data.bio || "",
+      });
+    } catch (error) {
+      console.error("Failed to load mechanic profile:", error);
+    }
+  }
 
-      const currentLoc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
+  async function loadAvailableServices() {
+    try {
+      const { data } = await api.get("/services");
+      setAvailableServices(data);
+    } catch (error) {
+      console.error("Failed to load services:", error);
+    }
+  }
+
+  async function updateMechanicProfile() {
+    try {
+      const servicesWithPrices = selectedServices.reduce((acc, serviceId) => {
+        if (customPrices[serviceId]) {
+          acc[serviceId] = parseFloat(customPrices[serviceId]);
+        }
+        return acc;
+      }, {} as Record<string, number>);
+
+      await api.put(`/mechanics/${user?.id}/profile`, {
+        ...profileForm,
+        experience_years: parseInt(profileForm.experience_years) || 0,
+        services_offered: selectedServices,
+        custom_prices: servicesWithPrices,
       });
 
-      const originLat = currentLoc.coords.latitude;
-      const originLng = currentLoc.coords.longitude;
-
-      const url = Platform.select({
-        ios: `maps://maps.apple.com/?daddr=${customerLat},${customerLng}&dirflg=d`,
-        android: `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLng}&destination=${customerLat},${customerLng}&travelmode=driving`,
-      });
-
-      const fallbackUrl = `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLng}&destination=${customerLat},${customerLng}&travelmode=driving`;
-
-      const finalUrl = url || fallbackUrl;
-
-      const canOpen = await Linking.canOpenURL(finalUrl);
-
-      if (canOpen) {
-        await Linking.openURL(finalUrl);
-      } else {
-        await Linking.openURL(fallbackUrl);
-      }
-    } catch (error) {
-      console.error("Failed to open maps:", error);
-      Alert.alert("Error", "Could not open maps. Please try again.");
+      Alert.alert("Success", "Profile updated successfully!");
+      setEditingProfile(false);
+      loadMechanicProfile();
+    } catch (error: any) {
+      Alert.alert("Error", error.response?.data?.error || "Failed to update profile");
     }
-  };
-
-  const openWazeNavigation = async (
-    customerLat: number,
-    customerLng: number,
-  ) => {
-    try {
-      const url = `https://waze.com/ul?ll=${customerLat},${customerLng}&navigate=yes`;
-      const canOpen = await Linking.canOpenURL(url);
-
-      if (canOpen) {
-        await Linking.openURL(url);
-      } else {
-        Alert.alert(
-          "Waze Not Found",
-          "Please install Waze from the app store.",
-        );
-      }
-    } catch (error) {
-      console.error("Failed to open Waze:", error);
-    }
-  };
-
-  const showNavigationOptions = (job: any) => {
-    Alert.alert(
-      "Navigate to Customer",
-      `Choose navigation app for: ${job.customer?.full_name || "Customer"}`,
-      [
-        {
-          text: "Google Maps",
-          onPress: () =>
-            openGoogleMapsNavigation(
-              job.customer_lat,
-              job.customer_lng,
-              job.customer_address,
-            ),
-        },
-        {
-          text: "Apple Maps",
-          onPress: () => {
-            if (Platform.OS === "ios") {
-              openGoogleMapsNavigation(
-                job.customer_lat,
-                job.customer_lng,
-                job.customer_address,
-              );
-            } else {
-              Alert.alert(
-                "Not Available",
-                "Apple Maps is only available on iOS.",
-              );
-            }
-          },
-        },
-        {
-          text: "View Address",
-          onPress: () => {
-            Alert.alert(
-              "Customer Address",
-              job.customer_address || "Address not provided",
-            );
-          },
-        },
-        { text: "Cancel", style: "cancel" },
-      ],
-      { cancelable: true },
-    );
-  };
+  }
 
   async function loadAvailability() {
     try {
@@ -842,15 +847,29 @@ export default function MechanicDashboard() {
     await getCurrentLocation();
     await loadData();
     await fetchTodayEarnings();
+    await fetchAnalytics();
+    await loadMechanicProfile();
     setRefreshing(false);
   }, []);
 
-  const renderJobCard = ({ item }: { item: Booking }) => {
-    console.log(item)
+  const toggleServiceSelection = (serviceId: string) => {
+    if (selectedServices.includes(serviceId)) {
+      setSelectedServices(selectedServices.filter(id => id !== serviceId));
+      // Remove custom price when deselecting
+      const newPrices = { ...customPrices };
+      delete newPrices[serviceId];
+      setCustomPrices(newPrices);
+    } else {
+      setSelectedServices([...selectedServices, serviceId]);
+    }
+  };
+
+  const renderJobCard = ({ item }: { item: any }) => {
     const isMyJob = activeTab === "myJobs";
     const hasCustomerRating = item.customer_rating;
     const hasMechanicRating = item.mechanic_rating;
     const isOtpVerified = otpVerifiedMap[item.id] || false;
+    const servicePrice = item.service_price || item.service?.base_price || 0;
 
     return (
       <View style={styles.card}>
@@ -875,6 +894,14 @@ export default function MechanicDashboard() {
         </View>
 
         <Text style={styles.cardMeta}>
+          Service: {item.service?.name || "Road assistance needed"}
+        </Text>
+        
+        <Text style={styles.cardMeta}>
+          Price: ₹{servicePrice}
+        </Text>
+
+        <Text style={styles.cardMeta}>
           Issue: {item.issue_note || "Road assistance needed"}
         </Text>
 
@@ -889,11 +916,11 @@ export default function MechanicDashboard() {
         )}
 
         {item.vehicle_type && (
-          <Text style={styles.cardMeta}>📍 {item.vehicle_type}</Text>
+          <Text style={styles.cardMeta}>🚗 {item.vehicle_type}</Text>
         )}
 
         {item.vehicle_model && (
-          <Text style={styles.cardMeta}>📍 {item.vehicle_model}</Text>
+          <Text style={styles.cardMeta}>🔧 {item.vehicle_model}</Text>
         )}
 
         {item.customer_lat && item.customer_lng && currentLocation && (
@@ -1064,6 +1091,395 @@ export default function MechanicDashboard() {
     );
   };
 
+  const renderProfile = () => {
+    return (
+      <ScrollView style={styles.profileContainer}>
+        <View style={styles.profileHeader}>
+          <View style={styles.profileAvatar}>
+            <Ionicons name="person" size={60} color="#FFF" />
+          </View>
+          <Text style={styles.profileName}>{mechanicProfile?.full_name || user?.full_name}</Text>
+          <Text style={styles.profileEmail}>{user?.email}</Text>
+          {mechanicProfile?.is_verified && (
+            <View style={styles.verifiedBadge}>
+              <Ionicons name="checkmark-circle" size={16} color="#10B981" />
+              <Text style={styles.verifiedText}>Verified Mechanic</Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.statsGrid}>
+          <View style={styles.statCard}>
+            <Ionicons name="star" size={24} color="#FBBF24" />
+            <Text style={styles.statValue}>{mechanicProfile?.rating?.toFixed(1) || "0.0"}</Text>
+            <Text style={styles.statLabel}>Rating</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Ionicons name="briefcase" size={24} color="#3B82F6" />
+            <Text style={styles.statValue}>{mechanicProfile?.total_jobs || 0}</Text>
+            <Text style={styles.statLabel}>Total Jobs</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Ionicons name="checkmark-done" size={24} color="#10B981" />
+            <Text style={styles.statValue}>{mechanicProfile?.completion_rate || 0}%</Text>
+            <Text style={styles.statLabel}>Completion</Text>
+          </View>
+        </View>
+
+        <View style={styles.infoSection}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Profile Information</Text>
+            <TouchableOpacity onPress={() => setEditingProfile(true)}>
+              <Ionicons name="create-outline" size={20} color="#3B82F6" />
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.infoRow}>
+            <Ionicons name="call-outline" size={18} color="#64748B" />
+            <Text style={styles.infoText}>{mechanicProfile?.phone || "Not provided"}</Text>
+          </View>
+          
+          <View style={styles.infoRow}>
+            <Ionicons name="car-outline" size={18} color="#64748B" />
+            <Text style={styles.infoText}>{mechanicProfile?.vehicle_type || "Not specified"}</Text>
+          </View>
+          
+          <View style={styles.infoRow}>
+            <Ionicons name="card-outline" size={18} color="#64748B" />
+            <Text style={styles.infoText}>License: {mechanicProfile?.license_number || "Not provided"}</Text>
+          </View>
+          
+          <View style={styles.infoRow}>
+            <Ionicons name="time-outline" size={18} color="#64748B" />
+            <Text style={styles.infoText}>Experience: {mechanicProfile?.experience_years || 0} years</Text>
+          </View>
+          
+          <View style={styles.infoRow}>
+            <Ionicons name="document-text-outline" size={18} color="#64748B" />
+            <Text style={styles.infoText}>Bio: {mechanicProfile?.bio || "No bio provided"}</Text>
+          </View>
+        </View>
+
+        <View style={styles.infoSection}>
+          <Text style={styles.sectionTitle}>Services Offered</Text>
+          {selectedServices.length > 0 ? (
+            selectedServices.map(serviceId => {
+              const service = availableServices.find(s => s.id === serviceId);
+              const customPrice = customPrices[serviceId];
+              return service ? (
+                <View key={serviceId} style={styles.serviceCard}>
+                  <View style={styles.serviceInfo}>
+                    <Text style={styles.serviceName}>{service.name}</Text>
+                    <Text style={styles.serviceDescription}>{service.description}</Text>
+                  </View>
+                  <View style={styles.servicePrice}>
+                    <Text style={styles.priceText}>
+                      ₹{customPrice || service.base_price}
+                    </Text>
+                    {customPrice && (
+                      <Text style={styles.customPriceBadge}>Custom</Text>
+                    )}
+                  </View>
+                </View>
+              ) : null;
+            })
+          ) : (
+            <Text style={styles.noServicesText}>No services selected yet</Text>
+          )}
+        </View>
+
+        {/* Edit Profile Modal */}
+        <Modal visible={editingProfile} transparent animationType="slide">
+          <View style={styles.modalOverlay}>
+            <ScrollView contentContainerStyle={styles.modalScrollContent}>
+              <View style={[styles.modalContent, { width: "95%", maxWidth: 500 }]}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Edit Profile</Text>
+                  <TouchableOpacity onPress={() => setEditingProfile(false)}>
+                    <Ionicons name="close" size={24} color="#64748B" />
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView style={{ maxHeight: 500 }}>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Full Name"
+                    value={profileForm.full_name}
+                    onChangeText={(text) => setProfileForm({ ...profileForm, full_name: text })}
+                  />
+                  
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Phone Number"
+                    value={profileForm.phone}
+                    onChangeText={(text) => setProfileForm({ ...profileForm, phone: text })}
+                    keyboardType="phone-pad"
+                  />
+                  
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Vehicle Type (e.g., Car, Motorcycle)"
+                    value={profileForm.vehicle_type}
+                    onChangeText={(text) => setProfileForm({ ...profileForm, vehicle_type: text })}
+                  />
+                  
+                  <TextInput
+                    style={styles.input}
+                    placeholder="License Number"
+                    value={profileForm.license_number}
+                    onChangeText={(text) => setProfileForm({ ...profileForm, license_number: text })}
+                  />
+                  
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Years of Experience"
+                    value={profileForm.experience_years}
+                    onChangeText={(text) => setProfileForm({ ...profileForm, experience_years: text })}
+                    keyboardType="numeric"
+                  />
+                  
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    placeholder="Bio / About You"
+                    value={profileForm.bio}
+                    onChangeText={(text) => setProfileForm({ ...profileForm, bio: text })}
+                    multiline
+                    numberOfLines={3}
+                  />
+
+                  <Text style={styles.sectionTitle}>Select Services & Set Prices</Text>
+                  
+                  {availableServices.map((service) => (
+                    <View key={service.id} style={styles.serviceSelectionCard}>
+                      <TouchableOpacity
+                        style={styles.serviceCheckbox}
+                        onPress={() => toggleServiceSelection(service.id)}
+                      >
+                        <Ionicons
+                          name={selectedServices.includes(service.id) ? "checkbox" : "square-outline"}
+                          size={24}
+                          color={selectedServices.includes(service.id) ? "#10B981" : "#64748B"}
+                        />
+                        <View style={styles.serviceCheckboxInfo}>
+                          <Text style={styles.serviceCheckboxName}>{service.name}</Text>
+                          <Text style={styles.serviceCheckboxDesc}>{service.description}</Text>
+                          <Text style={styles.defaultPrice}>Default: ₹{service.base_price}</Text>
+                        </View>
+                      </TouchableOpacity>
+                      
+                      {selectedServices.includes(service.id) && (
+                        <TextInput
+                          style={styles.priceInput}
+                          placeholder={`Custom Price (₹)`}
+                          value={customPrices[service.id] || ""}
+                          onChangeText={(text) => setCustomPrices({ ...customPrices, [service.id]: text })}
+                          keyboardType="numeric"
+                        />
+                      )}
+                    </View>
+                  ))}
+
+                  <TouchableOpacity style={styles.saveButton} onPress={updateMechanicProfile}>
+                    <Text style={styles.saveButtonText}>Save Changes</Text>
+                  </TouchableOpacity>
+                </ScrollView>
+              </View>
+            </ScrollView>
+          </View>
+        </Modal>
+      </ScrollView>
+    );
+  };
+
+  const renderAnalytics = () => {
+    return (
+      <ScrollView style={styles.analyticsContainer}>
+        <View style={styles.earningsOverview}>
+          <Text style={styles.overviewTitle}>Earnings Overview</Text>
+          
+          <View style={styles.earningCards}>
+            <View style={styles.earningCard}>
+              <Text style={styles.earningLabel}>Today</Text>
+              <Text style={styles.earningsAmount}>₹{todayEarnings}</Text>
+              <Text style={styles.earningJobs}>{todaysJobsCount} jobs</Text>
+            </View>
+            
+            <View style={styles.earningCard}>
+              <Text style={styles.earningLabel}>This Week</Text>
+              <Text style={styles.earningsAmount}>₹{weeklyEarnings}</Text>
+            </View>
+            
+            <View style={styles.earningCard}>
+              <Text style={styles.earningLabel}>This Month</Text>
+              <Text style={styles.earningsAmount}>₹{monthlyEarnings}</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.statsSection}>
+          <Text style={styles.sectionTitle}>Service Performance</Text>
+          {serviceStats.length > 0 ? (
+            serviceStats.map((stat: any) => (
+              <View key={stat.service_id} style={styles.serviceStatCard}>
+                <View style={styles.serviceStatHeader}>
+                  <Text style={styles.serviceStatName}>{stat.service_name}</Text>
+                  <View style={styles.serviceStatRating}>
+                    <Ionicons name="star" size={14} color="#FBBF24" />
+                    <Text style={styles.ratingText}>{stat.avg_rating.toFixed(1)}</Text>
+                  </View>
+                </View>
+                <View style={styles.serviceStatDetails}>
+                  <View style={styles.serviceStatItem}>
+                    <Ionicons name="checkmark-circle" size={16} color="#10B981" />
+                    <Text style={styles.serviceStatValue}>{stat.total_completed} completed</Text>
+                  </View>
+                  <View style={styles.serviceStatItem}>
+                    <Ionicons name="cash" size={16} color="#F59E0B" />
+                    <Text style={styles.serviceStatValue}>₹{stat.total_earnings} earned</Text>
+                  </View>
+                </View>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.noStatsText}>No service data available yet</Text>
+          )}
+        </View>
+
+        <View style={styles.statsSection}>
+          <Text style={styles.sectionTitle}>Quick Stats</Text>
+          <View style={styles.quickStatsGrid}>
+            <View style={styles.quickStat}>
+              <Ionicons name="happy" size={32} color="#10B981" />
+              <Text style={styles.quickStatValue}>{mechanicProfile?.rating?.toFixed(1) || "0.0"}</Text>
+              <Text style={styles.quickStatLabel}>Rating</Text>
+            </View>
+            <View style={styles.quickStat}>
+              <Ionicons name="briefcase" size={32} color="#3B82F6" />
+              <Text style={styles.quickStatValue}>{totalJobsCompleted}</Text>
+              <Text style={styles.quickStatLabel}>Total Jobs</Text>
+            </View>
+            <View style={styles.quickStat}>
+              <Ionicons name="checkmark-done" size={32} color="#8B5CF6" />
+              <Text style={styles.quickStatValue}>{mechanicProfile?.completion_rate || 0}%</Text>
+              <Text style={styles.quickStatLabel}>Completion</Text>
+            </View>
+          </View>
+        </View>
+      </ScrollView>
+    );
+  };
+
+  const openGoogleMapsNavigation = async (
+    customerLat: number,
+    customerLng: number,
+    customerAddress: string,
+  ) => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission Denied",
+          "Please enable location permissions to use navigation.",
+        );
+        return;
+      }
+
+      const currentLoc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      const originLat = currentLoc.coords.latitude;
+      const originLng = currentLoc.coords.longitude;
+
+      const url = Platform.select({
+        ios: `maps://maps.apple.com/?daddr=${customerLat},${customerLng}&dirflg=d`,
+        android: `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLng}&destination=${customerLat},${customerLng}&travelmode=driving`,
+      });
+
+      const fallbackUrl = `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLng}&destination=${customerLat},${customerLng}&travelmode=driving`;
+
+      const finalUrl = url || fallbackUrl;
+
+      const canOpen = await Linking.canOpenURL(finalUrl);
+
+      if (canOpen) {
+        await Linking.openURL(finalUrl);
+      } else {
+        await Linking.openURL(fallbackUrl);
+      }
+    } catch (error) {
+      console.error("Failed to open maps:", error);
+      Alert.alert("Error", "Could not open maps. Please try again.");
+    }
+  };
+
+  const openWazeNavigation = async (
+    customerLat: number,
+    customerLng: number,
+  ) => {
+    try {
+      const url = `https://waze.com/ul?ll=${customerLat},${customerLng}&navigate=yes`;
+      const canOpen = await Linking.canOpenURL(url);
+
+      if (canOpen) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert(
+          "Waze Not Found",
+          "Please install Waze from the app store.",
+        );
+      }
+    } catch (error) {
+      console.error("Failed to open Waze:", error);
+    }
+  };
+
+  const showNavigationOptions = (job: any) => {
+    Alert.alert(
+      "Navigate to Customer",
+      `Choose navigation app for: ${job.customer?.full_name || "Customer"}`,
+      [
+        {
+          text: "Google Maps",
+          onPress: () =>
+            openGoogleMapsNavigation(
+              job.customer_lat,
+              job.customer_lng,
+              job.customer_address,
+            ),
+        },
+        {
+          text: "Apple Maps",
+          onPress: () => {
+            if (Platform.OS === "ios") {
+              openGoogleMapsNavigation(
+                job.customer_lat,
+                job.customer_lng,
+                job.customer_address,
+              );
+            } else {
+              Alert.alert(
+                "Not Available",
+                "Apple Maps is only available on iOS.",
+              );
+            }
+          },
+        },
+        {
+          text: "View Address",
+          onPress: () => {
+            Alert.alert(
+              "Customer Address",
+              job.customer_address || "Address not provided",
+            );
+          },
+        },
+        { text: "Cancel", style: "cancel" },
+      ],
+      { cancelable: true },
+    );
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -1092,18 +1508,19 @@ export default function MechanicDashboard() {
                   {selectedBooking.service?.name || "Roadside Assistance"}
                 </Text>
                 <Text style={styles.modalDetailText}>
+                  Price: ₹{selectedBooking.service?.base_price || 0}
+                </Text>
+                <Text style={styles.modalDetailText}>
                   Issue: {selectedBooking.issue_note || "Not specified"}
                 </Text>
                 <Text style={styles.modalDetailText}>
                   Vehicle Model:{" "}
-                  {selectedBooking.vehicle_type || "Address provided"}
+                  {selectedBooking.vehicle_type || "Not specified"}
                 </Text>
-
                 <Text style={styles.modalDetailText}>
                   Vehicle Type:{" "}
-                  {selectedBooking.vehicle_model || "Address provided"}
+                  {selectedBooking.vehicle_model || "Not specified"}
                 </Text>
-
               </View>
             )}
             <View style={styles.modalButtons}>
@@ -1380,7 +1797,10 @@ export default function MechanicDashboard() {
       </View>
 
       {/* Today's Earnings Card */}
-      <View style={styles.earningsCard}>
+      <TouchableOpacity 
+        style={styles.earningsCard} 
+        onPress={() => setActiveTab("analytics")}
+      >
         <View style={styles.earningsLeft}>
           <Ionicons name="cash-outline" size={28} color="#10B981" />
           <View>
@@ -1397,7 +1817,7 @@ export default function MechanicDashboard() {
         >
           <Ionicons name="refresh-outline" size={20} color="#64748B" />
         </TouchableOpacity>
-      </View>
+      </TouchableOpacity>
 
       {/* Status Bar */}
       <View style={styles.statusBar}>
@@ -1449,38 +1869,70 @@ export default function MechanicDashboard() {
             My Jobs ({myJobs.length})
           </Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === "profile" && styles.activeTab]}
+          onPress={() => setActiveTab("profile")}
+        >
+          <Text
+            style={[
+              styles.tabText,
+              activeTab === "profile" && styles.activeTabText,
+            ]}
+          >
+            Profile
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === "analytics" && styles.activeTab]}
+          onPress={() => setActiveTab("analytics")}
+        >
+          <Text
+            style={[
+              styles.tabText,
+              activeTab === "analytics" && styles.activeTabText,
+            ]}
+          >
+            Analytics
+          </Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Jobs List */}
-      <FlatList
-        data={activeTab === "available" ? jobs : myJobs}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={["#0F172A"]}
-            tintColor="#0F172A"
-          />
-        }
-        renderItem={renderJobCard}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="construct-outline" size={64} color="#CBD5E1" />
-            <Text style={styles.emptyStateText}>
-              {activeTab === "available"
-                ? "No available jobs at the moment"
-                : "You have no active jobs"}
-            </Text>
-            {activeTab === "available" && online && (
-              <Text style={styles.emptyStateSubtext}>
-                New requests will appear here automatically
+      {/* Content */}
+      {activeTab === "profile" ? (
+        renderProfile()
+      ) : activeTab === "analytics" ? (
+        renderAnalytics()
+      ) : (
+        <FlatList
+          data={activeTab === "available" ? jobs : myJobs}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.content}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={["#0F172A"]}
+              tintColor="#0F172A"
+            />
+          }
+          renderItem={renderJobCard}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Ionicons name="construct-outline" size={64} color="#CBD5E1" />
+              <Text style={styles.emptyStateText}>
+                {activeTab === "available"
+                  ? "No available jobs at the moment"
+                  : "You have no active jobs"}
               </Text>
-            )}
-          </View>
-        }
-      />
+              {activeTab === "available" && online && (
+                <Text style={styles.emptyStateSubtext}>
+                  New requests will appear here automatically
+                </Text>
+              )}
+            </View>
+          }
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -1919,4 +2371,307 @@ const styles = StyleSheet.create({
     color: "#3B82F6",
   },
   closeRatingsButtonText: { color: "#FFF", fontSize: 16, fontWeight: "600" },
+  
+  // Profile styles
+  profileContainer: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+  },
+  profileHeader: {
+    alignItems: "center",
+    backgroundColor: "#FFF",
+    paddingVertical: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  profileAvatar: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: "#0F172A",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  profileName: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#0F172A",
+    marginBottom: 4,
+  },
+  profileEmail: {
+    fontSize: 14,
+    color: "#64748B",
+    marginBottom: 8,
+  },
+  verifiedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F0FDF4",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 16,
+    gap: 4,
+  },
+  verifiedText: {
+    fontSize: 12,
+    color: "#10B981",
+    fontWeight: "600",
+  },
+  statsGrid: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    paddingVertical: 20,
+    backgroundColor: "#FFF",
+    marginTop: 8,
+  },
+  statCard: {
+    alignItems: "center",
+  },
+  statValue: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#0F172A",
+    marginTop: 8,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: "#64748B",
+    marginTop: 4,
+  },
+  infoSection: {
+    backgroundColor: "#FFF",
+    marginTop: 12,
+    padding: 20,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0F172A",
+    marginBottom: 16,
+  },
+  infoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 12,
+  },
+  infoText: {
+    fontSize: 14,
+    color: "#475569",
+    flex: 1,
+  },
+  serviceCard: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  serviceInfo: {
+    flex: 1,
+  },
+  serviceName: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#0F172A",
+    marginBottom: 4,
+  },
+  serviceDescription: {
+    fontSize: 12,
+    color: "#64748B",
+  },
+  servicePrice: {
+    alignItems: "flex-end",
+  },
+  priceText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#10B981",
+  },
+  customPriceBadge: {
+    fontSize: 10,
+    color: "#8B5CF6",
+    marginTop: 2,
+  },
+  noServicesText: {
+    fontSize: 14,
+    color: "#94A3B8",
+    textAlign: "center",
+    paddingVertical: 20,
+  },
+  
+  // Edit profile modal styles
+  input: {
+    backgroundColor: "#F1F5F9",
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    fontSize: 14,
+  },
+  textArea: {
+    minHeight: 80,
+    textAlignVertical: "top",
+  },
+  serviceSelectionCard: {
+    marginBottom: 16,
+    padding: 12,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 8,
+  },
+  serviceCheckbox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  serviceCheckboxInfo: {
+    flex: 1,
+  },
+  serviceCheckboxName: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0F172A",
+    marginBottom: 4,
+  },
+  serviceCheckboxDesc: {
+    fontSize: 12,
+    color: "#64748B",
+    marginBottom: 4,
+  },
+  defaultPrice: {
+    fontSize: 11,
+    color: "#10B981",
+  },
+  priceInput: {
+    backgroundColor: "#FFF",
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    fontSize: 14,
+  },
+  saveButton: {
+    backgroundColor: "#0F172A",
+    padding: 16,
+    borderRadius: 12,
+    alignItems: "center",
+    marginTop: 20,
+  },
+  saveButtonText: {
+    color: "#FFF",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  
+  // Analytics styles
+  analyticsContainer: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+  },
+  earningsOverview: {
+    backgroundColor: "#FFF",
+    padding: 20,
+    marginBottom: 12,
+  },
+  overviewTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0F172A",
+    marginBottom: 16,
+  },
+  earningCards: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  earningCard: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+    padding: 12,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  earningLabel: {
+    fontSize: 12,
+    color: "#64748B",
+    marginBottom: 4,
+  },
+  earningJobs: {
+    fontSize: 10,
+    color: "#94A3B8",
+    marginTop: 4,
+  },
+  statsSection: {
+    backgroundColor: "#FFF",
+    padding: 20,
+    marginBottom: 12,
+  },
+  serviceStatCard: {
+    marginBottom: 16,
+    padding: 12,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
+  },
+  serviceStatHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  serviceStatName: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#0F172A",
+  },
+  serviceStatRating: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  serviceStatDetails: {
+    flexDirection: "row",
+    gap: 16,
+  },
+  serviceStatItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  serviceStatValue: {
+    fontSize: 13,
+    color: "#475569",
+  },
+  noStatsText: {
+    fontSize: 14,
+    color: "#94A3B8",
+    textAlign: "center",
+    paddingVertical: 20,
+  },
+  quickStatsGrid: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    paddingVertical: 16,
+  },
+  quickStat: {
+    alignItems: "center",
+  },
+  quickStatValue: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#0F172A",
+    marginTop: 8,
+  },
+  quickStatLabel: {
+    fontSize: 12,
+    color: "#64748B",
+    marginTop: 4,
+  },
 });
