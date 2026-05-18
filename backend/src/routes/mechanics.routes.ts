@@ -100,8 +100,8 @@ mechanicsRouter.put('/:mechanicId/profile', async (req, res) => {
       .from('profiles')
       .update({
         full_name,
-        phone,
-        updated_at: new Date().toISOString()
+        phone
+        // updated_at: new Date().toISOString()
       })
       .eq('id', mechanicId);
     
@@ -115,8 +115,8 @@ mechanicsRouter.put('/:mechanicId/profile', async (req, res) => {
         vehicle_type,
         license_number,
         experience_years,
-        bio,
-        updated_at: new Date().toISOString()
+        bio
+        // updated_at: new Date().toISOString()
       }, { onConflict: 'profile_id' });
     
     if (statusError) throw statusError;

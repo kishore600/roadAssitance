@@ -1267,7 +1267,7 @@ export default function MechanicDashboard() {
                         </View>
                       </TouchableOpacity>
                       
-                      {selectedServices.includes(service.id) && (
+                      {/* {selectedServices.includes(service.id) && (
                         <TextInput
                           style={styles.priceInput}
                           placeholder={`Custom Price (₹)`}
@@ -1275,7 +1275,7 @@ export default function MechanicDashboard() {
                           onChangeText={(text) => setCustomPrices({ ...customPrices, [service.id]: text })}
                           keyboardType="numeric"
                         />
-                      )}
+                      )} */}
                     </View>
                   ))}
 
