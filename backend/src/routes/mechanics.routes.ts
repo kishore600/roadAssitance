@@ -34,7 +34,7 @@ mechanicsRouter.get('/:mechanicId/profile', async (req, res) => {
       .eq('mechanic_id', mechanicId);
     
     const servicesOffered = mechanicServices?.map((ms) => ms.service_id) || [];
-    const customPrices = {};
+    const customPrices:any = {};
     mechanicServices?.forEach((ms) => {
       if (ms.custom_price) {
         customPrices[ms.service_id] = ms.custom_price;
@@ -134,7 +134,7 @@ mechanicsRouter.put('/:mechanicId/profile', async (req, res) => {
     
     // Then insert new services
     if (services_offered && services_offered.length > 0) {
-      const serviceInserts = services_offered.map((serviceId) => ({
+      const serviceInserts = services_offered.map((serviceId:any) => ({
         mechanic_id: mechanicId,
         service_id: serviceId,
         custom_price: custom_prices?.[serviceId] || null
@@ -202,7 +202,7 @@ mechanicsRouter.get('/:mechanicId/analytics', async (req, res) => {
       .eq('status', 'completed');
     
     const serviceStatsMap = new Map();
-    serviceStats?.forEach((booking) => {
+    serviceStats?.forEach((booking:any) => {
       const serviceId = booking.service_id;
       if (!serviceStatsMap.has(serviceId)) {
         serviceStatsMap.set(serviceId, {
@@ -313,7 +313,7 @@ mechanicsRouter.patch('/:mechanicId/location', async (req, res) => {
 // Get nearby mechanics
 mechanicsRouter.get('/nearby', async (req, res) => {
   try {
-    const { lat, lng, radiusKm = 10 } = req.query;
+    const { lat, lng, radiusKm = 10 }:any = req.query;
     
     if (!lat || !lng) {
       return res.status(400).json({ error: 'Latitude and longitude are required' });
@@ -340,8 +340,8 @@ mechanicsRouter.get('/nearby', async (req, res) => {
     
     // Calculate distances and filter
     const mechanics = (data || [])
-      .filter(m => m.current_lat && m.current_lng)
-      .map(m => {
+      .filter((m:any) => m.current_lat && m.current_lng)
+      .map((m:any) => {
         const distance = calculateDistance(
           parseFloat(lat),
           parseFloat(lng),
@@ -370,7 +370,7 @@ mechanicsRouter.get('/nearby', async (req, res) => {
   }
 });
 
-function calculateDistance(lat1, lon1, lat2, lon2) {
+function calculateDistance(lat1:any, lon1:any, lat2:any, lon2:any) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
