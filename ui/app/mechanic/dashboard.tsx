@@ -101,28 +101,23 @@ export default function MechanicDashboard() {
   const { user, logout } = useAuth();
   const [showOTPModal, setShowOTPModal] = useState(false);
   const [generatedOTP, setGeneratedOTP] = useState("");
+  const [enteredOTP, setEnteredOTP] = useState("");
+  const [verifyingOTP, setVerifyingOTP] = useState(false);
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [customerRating, setCustomerRating] = useState(0);
   const [customerReview, setCustomerReview] = useState("");
-  const [selectedCompletedBooking, setSelectedCompletedBooking] =
-    useState<any>(null);
+  const [selectedCompletedBooking, setSelectedCompletedBooking] = useState<any>(null);
   const [showRatingsDetailModal, setShowRatingsDetailModal] = useState(false);
-  const [selectedRatingsBooking, setSelectedRatingsBooking] =
-    useState<any>(null);
+  const [selectedRatingsBooking, setSelectedRatingsBooking] = useState<any>(null);
   const [todayEarnings, setTodayEarnings] = useState(0);
   const [todaysJobsCount, setTodaysJobsCount] = useState(0);
   const [weeklyEarnings, setWeeklyEarnings] = useState(0);
   const [monthlyEarnings, setMonthlyEarnings] = useState(0);
   const [totalJobsCompleted, setTotalJobsCompleted] = useState(0);
   const [serviceStats, setServiceStats] = useState<ServiceStats[]>([]);
-  const [currentJob, setCurrentJob] = useState<any>(null);
   const [activeBooking, setActiveBooking] = useState<any | null>(null);
-  const [otpVerifiedMap, setOtpVerifiedMap] = useState<{
-    [key: string]: boolean;
-  }>({});
   
   // Profile states
-  const [showProfileModal, setShowProfileModal] = useState(false);
   const [mechanicProfile, setMechanicProfile] = useState<MechanicProfile | null>(null);
   const [availableServices, setAvailableServices] = useState<Service[]>([]);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
@@ -139,9 +134,6 @@ export default function MechanicDashboard() {
   
   // Sound related states
   const soundRef = useRef<Audio.Sound | null>(null);
-  const [isPlayingSound, setIsPlayingSound] = useState(false);
-
-  let locationInterval: any;
 
   // Function to play beep sound
   const playBeepSound = async () => {
@@ -239,11 +231,6 @@ export default function MechanicDashboard() {
     return Math.min(etaMinutes, 30);
   }
 
-  const isOtpVerifiedForCurrentBooking = () => {
-    if (!activeBooking?.id) return false;
-    return otpVerifiedMap[activeBooking.id] || false;
-  };
-
   async function fetchTodayEarnings() {
     try {
       const today = new Date().toISOString().split("T")[0];
@@ -279,13 +266,13 @@ export default function MechanicDashboard() {
         {},
       );
       if (response.data.success) {
-        setGeneratedOTP(response.data.otp);
+        const generatedOtp = response.data.otp;
+        setGeneratedOTP(generatedOtp);
         setShowOTPModal(true);
-        setOtpVerifiedMap((prev) => ({ ...prev, [bookingId]: false }));
 
         Alert.alert(
-          "OTP Generated",
-          `Share this OTP with the customer: ${response.data.otp}\n\nThis OTP will expire in 10 minutes.`,
+          "🔐 OTP Generated",
+          `Share this OTP with the customer:\n\n${generatedOtp}\n\n⚠️ This OTP will expire in 10 minutes.\n\nThen ask the customer for the code and enter it below.`,
           [{ text: "OK" }],
         );
       }
@@ -297,31 +284,47 @@ export default function MechanicDashboard() {
     }
   }
 
-  useEffect(() => {
-    const handleOtpVerified = (data: { bookingId: string }) => {
-      console.log("✅ OTP verified event received in mechanic:", data);
-      if (data.bookingId) {
-        setOtpVerifiedMap((prev) => ({ ...prev, [data.bookingId]: true }));
+  async function verifyMechanicOTP(bookingId: string, otp: string) {
+    if (!otp || otp.length !== 6) {
+      Alert.alert("Error", "Please enter a valid 6-digit OTP");
+      return;
+    }
 
-        if (data.bookingId === activeBooking?.id) {
-          Alert.alert(
-            "✓ OTP Verified!",
-            "Customer has verified the OTP. You can now complete the service.",
-            [{ text: "OK" }],
-          );
-          loadMyJobs();
-        }
+    setVerifyingOTP(true);
+    try {
+      const response = await api.post(`/bookings/${bookingId}/verify-otp`, {
+        otp: otp,
+        mechanicId: user?.id,
+      });
+
+      if (response.data.success) {
+        Alert.alert(
+          "✅ Service Completed!",
+          "The service has been completed successfully.",
+          [
+            {
+              text: "OK",
+              onPress: () => {
+                setShowOTPModal(false);
+                setEnteredOTP("");
+                setGeneratedOTP("");
+                loadMyJobs();
+                fetchTodayEarnings();
+                fetchAnalytics();
+              },
+            },
+          ],
+        );
       }
-    };
-
-    socket.on("otp:verified", handleOtpVerified);
-    socketService.on("otp:verified", handleOtpVerified);
-
-    return () => {
-      socket.off("otp:verified", handleOtpVerified);
-      socketService.off("otp:verified", handleOtpVerified);
-    };
-  }, [activeBooking?.id]);
+    } catch (error: any) {
+      Alert.alert(
+        "Verification Failed",
+        error.response?.data?.error || "Invalid OTP. Please try again.",
+      );
+    } finally {
+      setVerifyingOTP(false);
+    }
+  }
   
   async function rateCustomer(booking: any) {
     setSelectedCompletedBooking(booking);
@@ -363,15 +366,6 @@ export default function MechanicDashboard() {
     status: "on_the_way" | "arrived" | "completed",
   ) {
     try {
-      if (status === "completed" && !isOtpVerifiedForCurrentBooking()) {
-        Alert.alert(
-          "OTP Required",
-          "Please wait for the customer to verify the OTP before completing the service.",
-          [{ text: "OK" }],
-        );
-        return;
-      }
-
       const response = await api.patch(`/bookings/${bookingId}/status`, {
         status,
       });
@@ -388,32 +382,12 @@ export default function MechanicDashboard() {
       }
 
       if (status === "completed") {
-        const completedJob = myJobs.find((job) => job.id === bookingId);
-        if (completedJob) {
-          socketService.completeBooking(
-            bookingId,
-            completedJob.customer_id,
-            user?.id,
-            user?.full_name,
-            completedJob.customer?.full_name,
-          );
-        }
         await fetchTodayEarnings();
         await fetchAnalytics();
-        setShowOTPModal(false);
-        setGeneratedOTP("");
-        setOtpVerifiedMap((prev) => ({ ...prev, [bookingId]: false }));
       }
 
       Alert.alert("Updated", `Booking marked as ${status.replace("_", " ")}.`);
       await loadMyJobs();
-
-      if (status === "completed" || status === "arrived") {
-        const active = myJobs.find(
-          (job) => job.id === bookingId && job.status !== "completed",
-        );
-        setActiveBooking(active || null);
-      }
     } catch (error) {
       console.error("Failed to update status:", error);
       Alert.alert("Error", "Failed to update status");
@@ -529,7 +503,7 @@ export default function MechanicDashboard() {
 
       Alert.alert(
         "🔔 New Service Request!",
-        `A customer needs ${booking.service?.name || "assistance"}. Tap to view details.\n\nVehicle: ${booking.vehicle_type} - ${booking.vehicle_model}\nDistance: ${booking.distance ? booking.distance.toFixed(1) : 'Calculating...'} km away`,
+        `A customer needs ${booking.service?.name || "assistance"}. Tap to view details.\n\nVehicle: ${booking.vehicle_type} - ${booking.vehicle_model}`,
         [
           {
             text: "View Now",
@@ -618,16 +592,14 @@ export default function MechanicDashboard() {
       setMechanicProfile(data);
       setSelectedServices(data.services_offered || []);
       
-      // Initialize custom prices
       const prices: Record<string, string> = {};
       if (data.custom_prices) {
-        Object.entries(data.custom_prices).forEach(([key, value]:any) => {
+        Object.entries(data.custom_prices).forEach(([key, value]: any) => {
           prices[key] = value.toString();
         });
       }
       setCustomPrices(prices);
       
-      // Initialize profile form
       setProfileForm({
         full_name: data.full_name || "",
         phone: data.phone || "",
@@ -747,7 +719,7 @@ export default function MechanicDashboard() {
 
     setAccepting(true);
     try {
-      const response = await api.patch(`/bookings/${selectedBooking.id}/assign`, {
+      await api.patch(`/bookings/${selectedBooking.id}/assign`, {
         mechanicId: user?.id,
         etaMinutes: 15,
         status: "accepted",
@@ -855,7 +827,6 @@ export default function MechanicDashboard() {
   const toggleServiceSelection = (serviceId: string) => {
     if (selectedServices.includes(serviceId)) {
       setSelectedServices(selectedServices.filter(id => id !== serviceId));
-      // Remove custom price when deselecting
       const newPrices = { ...customPrices };
       delete newPrices[serviceId];
       setCustomPrices(newPrices);
@@ -868,7 +839,6 @@ export default function MechanicDashboard() {
     const isMyJob = activeTab === "myJobs";
     const hasCustomerRating = item.customer_rating;
     const hasMechanicRating = item.mechanic_rating;
-    const isOtpVerified = otpVerifiedMap[item.id] || false;
     const servicePrice = item.service_price || item.service?.base_price || 0;
 
     return (
@@ -1054,20 +1024,19 @@ export default function MechanicDashboard() {
                   >
                     <Ionicons name="key-outline" size={16} color="#FFF" />
                     <Text style={[styles.smallBtnText, { color: "#FFF" }]}>
-                      Show OTP
+                      Generate OTP
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[
-                      styles.smallBtn,
-                      styles.completeBtn,
-                      !isOtpVerified && styles.disabledButton,
-                    ]}
-                    onPress={() => updateStatus(item.id, "completed")}
-                    disabled={!isOtpVerified}
+                    style={[styles.smallBtn, styles.completeBtn]}
+                    onPress={() => {
+                      setActiveBooking(item);
+                      setShowOTPModal(true);
+                      setEnteredOTP("");
+                    }}
                   >
                     <Text style={[styles.smallBtnText, { color: "#FFF" }]}>
-                      {isOtpVerified ? "Complete" : "Waiting for OTP..."}
+                      Complete Service
                     </Text>
                   </TouchableOpacity>
                 </>
@@ -1266,16 +1235,6 @@ export default function MechanicDashboard() {
                           <Text style={styles.defaultPrice}>Default: ₹{service.base_price}</Text>
                         </View>
                       </TouchableOpacity>
-                      
-                      {/* {selectedServices.includes(service.id) && (
-                        <TextInput
-                          style={styles.priceInput}
-                          placeholder={`Custom Price (₹)`}
-                          value={customPrices[service.id] || ""}
-                          onChangeText={(text) => setCustomPrices({ ...customPrices, [service.id]: text })}
-                          keyboardType="numeric"
-                        />
-                      )} */}
                     </View>
                   ))}
 
@@ -1413,27 +1372,6 @@ export default function MechanicDashboard() {
     }
   };
 
-  const openWazeNavigation = async (
-    customerLat: number,
-    customerLng: number,
-  ) => {
-    try {
-      const url = `https://waze.com/ul?ll=${customerLat},${customerLng}&navigate=yes`;
-      const canOpen = await Linking.canOpenURL(url);
-
-      if (canOpen) {
-        await Linking.openURL(url);
-      } else {
-        Alert.alert(
-          "Waze Not Found",
-          "Please install Waze from the app store.",
-        );
-      }
-    } catch (error) {
-      console.error("Failed to open Waze:", error);
-    }
-  };
-
   const showNavigationOptions = (job: any) => {
     Alert.alert(
       "Navigate to Customer",
@@ -1504,22 +1442,13 @@ export default function MechanicDashboard() {
             {selectedBooking && (
               <View style={styles.modalDetails}>
                 <Text style={styles.modalDetailText}>
-                  Service:{" "}
-                  {selectedBooking.service?.name || "Roadside Assistance"}
+                  Service: {selectedBooking.service?.name || "Roadside Assistance"}
                 </Text>
                 <Text style={styles.modalDetailText}>
                   Price: ₹{selectedBooking.service?.base_price || 0}
                 </Text>
                 <Text style={styles.modalDetailText}>
                   Issue: {selectedBooking.issue_note || "Not specified"}
-                </Text>
-                <Text style={styles.modalDetailText}>
-                  Vehicle Model:{" "}
-                  {selectedBooking.vehicle_type || "Not specified"}
-                </Text>
-                <Text style={styles.modalDetailText}>
-                  Vehicle Type:{" "}
-                  {selectedBooking.vehicle_model || "Not specified"}
                 </Text>
               </View>
             )}
@@ -1544,35 +1473,71 @@ export default function MechanicDashboard() {
         </View>
       </Modal>
 
-      {/* OTP Display Modal */}
-      <Modal visible={showOTPModal} transparent animationType="fade">
+      {/* ✅ CORRECTED OTP MODAL - Mechanic enters OTP */}
+      <Modal visible={showOTPModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { width: "90%", maxWidth: 400 }]}>
             <View style={styles.otpHeader}>
-              <Ionicons name="key" size={40} color="#10B981" />
-              <Text style={styles.modalTitle}>Service Completion OTP</Text>
+              <Ionicons name="key" size={50} color="#10B981" />
+              <Text style={styles.modalTitle}>Complete Service</Text>
             </View>
-            <Text style={styles.otpDisplayText}>{generatedOTP}</Text>
+            
+            <View style={styles.otpDivider}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>ENTER CODE FROM CUSTOMER</Text>
+              <View style={styles.dividerLine} />
+            </View>
+            
             <Text style={styles.otpInstruction}>
-              Share this OTP with the customer to complete the service
+              Ask the customer for the 6-digit code and enter it below:
             </Text>
-            <Text style={styles.otpExpiry}>Valid for 10 minutes</Text>
-            <Text
-              style={[
-                styles.otpStatus,
-                isOtpVerifiedForCurrentBooking() && styles.otpVerified,
-              ]}
-            >
-              {isOtpVerifiedForCurrentBooking()
-                ? "✓ OTP Verified"
-                : "⏳ Waiting for customer verification..."}
-            </Text>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setShowOTPModal(false)}
-            >
-              <Text style={styles.modalCloseText}>Close</Text>
-            </TouchableOpacity>
+            
+            <TextInput
+              style={styles.otpInputField}
+              placeholder="Enter 6-digit OTP"
+              value={enteredOTP}
+              onChangeText={setEnteredOTP}
+              keyboardType="number-pad"
+              maxLength={6}
+              textAlign="center"
+              autoFocus
+            />
+            
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalCancelButton]}
+                onPress={() => {
+                  setShowOTPModal(false);
+                  setEnteredOTP("");
+                }}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[
+                  styles.modalButton, 
+                  styles.modalAcceptButton,
+                  (!enteredOTP || enteredOTP.length !== 6) && styles.disabledButton
+                ]}
+                onPress={() => verifyMechanicOTP(activeBooking?.id, enteredOTP)}
+                disabled={!enteredOTP || enteredOTP.length !== 6 || verifyingOTP}
+              >
+                <Text style={styles.modalAcceptText}>
+                  {verifyingOTP ? "Verifying..." : "Verify & Complete"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            
+            {!generatedOTP && activeBooking?.status === "arrived" && (
+              <TouchableOpacity
+                style={styles.refreshOtpButton}
+                onPress={() => generateOTPForCompletion(activeBooking?.id)}
+              >
+                <Ionicons name="refresh-outline" size={16} color="#3B82F6" />
+                <Text style={styles.refreshOtpText}>Generate OTP First</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </Modal>
@@ -1638,14 +1603,10 @@ export default function MechanicDashboard() {
       <Modal visible={showRatingsDetailModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <ScrollView contentContainerStyle={styles.modalScrollContent}>
-            <View
-              style={[styles.modalContent, { width: "90%", maxWidth: 500 }]}
-            >
+            <View style={[styles.modalContent, { width: "90%", maxWidth: 500 }]}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Ratings & Reviews</Text>
-                <TouchableOpacity
-                  onPress={() => setShowRatingsDetailModal(false)}
-                >
+                <TouchableOpacity onPress={() => setShowRatingsDetailModal(false)}>
                   <Ionicons name="close" size={24} color="#64748B" />
                 </TouchableOpacity>
               </View>
@@ -1657,23 +1618,15 @@ export default function MechanicDashboard() {
                       Booking #{selectedRatingsBooking.id.slice(0, 8)}
                     </Text>
                     <Text style={styles.bookingInfoDate}>
-                      {new Date(
-                        selectedRatingsBooking.created_at,
-                      ).toLocaleDateString()}
+                      {new Date(selectedRatingsBooking.created_at).toLocaleDateString()}
                     </Text>
                   </View>
 
                   <View style={styles.ratingSection}>
                     <View style={styles.ratingHeader}>
                       <View style={styles.ratingTitleContainer}>
-                        <Ionicons
-                          name="person-outline"
-                          size={20}
-                          color="#0F172A"
-                        />
-                        <Text style={styles.ratingTitle}>
-                          Customer's Rating
-                        </Text>
+                        <Ionicons name="person-outline" size={20} color="#0F172A" />
+                        <Text style={styles.ratingTitle}>Customer's Rating</Text>
                       </View>
                       <Text style={styles.ratingRoleBadge}>Of You</Text>
                     </View>
@@ -1682,22 +1635,14 @@ export default function MechanicDashboard() {
                       {selectedRatingsBooking.customer_rating ? (
                         <>
                           <View style={styles.ratingStarsLarge}>
-                            {renderStars(
-                              selectedRatingsBooking.customer_rating,
-                            )}
+                            {renderStars(selectedRatingsBooking.customer_rating)}
                             <Text style={styles.ratingText}>
-                              (
-                              {selectedRatingsBooking.customer_rating.toFixed(
-                                1,
-                              )}
-                              )
+                              ({selectedRatingsBooking.customer_rating.toFixed(1)})
                             </Text>
                           </View>
                           {selectedRatingsBooking.customer_review && (
                             <View style={styles.reviewContainer}>
-                              <Text style={styles.reviewLabel}>
-                                Customer's Review:
-                              </Text>
+                              <Text style={styles.reviewLabel}>Customer's Review:</Text>
                               <Text style={styles.reviewText}>
                                 "{selectedRatingsBooking.customer_review}"
                               </Text>
@@ -1706,11 +1651,7 @@ export default function MechanicDashboard() {
                         </>
                       ) : (
                         <View style={styles.noRatingContainer}>
-                          <Ionicons
-                            name="star-outline"
-                            size={32}
-                            color="#CBD5E1"
-                          />
+                          <Ionicons name="star-outline" size={32} color="#CBD5E1" />
                           <Text style={styles.noRatingText}>No rating yet</Text>
                         </View>
                       )}
@@ -1720,16 +1661,10 @@ export default function MechanicDashboard() {
                   <View style={styles.ratingSection}>
                     <View style={styles.ratingHeader}>
                       <View style={styles.ratingTitleContainer}>
-                        <Ionicons
-                          name="construct-outline"
-                          size={20}
-                          color="#0F172A"
-                        />
+                        <Ionicons name="construct-outline" size={20} color="#0F172A" />
                         <Text style={styles.ratingTitle}>Your Rating</Text>
                       </View>
-                      <Text
-                        style={[styles.ratingRoleBadge, styles.mechanicBadge]}
-                      >
+                      <Text style={[styles.ratingRoleBadge, styles.mechanicBadge]}>
                         Of Customer
                       </Text>
                     </View>
@@ -1738,22 +1673,14 @@ export default function MechanicDashboard() {
                       {selectedRatingsBooking.mechanic_rating ? (
                         <>
                           <View style={styles.ratingStarsLarge}>
-                            {renderStars(
-                              selectedRatingsBooking.mechanic_rating,
-                            )}
+                            {renderStars(selectedRatingsBooking.mechanic_rating)}
                             <Text style={styles.ratingText}>
-                              (
-                              {selectedRatingsBooking.mechanic_rating.toFixed(
-                                1,
-                              )}
-                              )
+                              ({selectedRatingsBooking.mechanic_rating.toFixed(1)})
                             </Text>
                           </View>
                           {selectedRatingsBooking.mechanic_review && (
                             <View style={styles.reviewContainer}>
-                              <Text style={styles.reviewLabel}>
-                                Your Review:
-                              </Text>
+                              <Text style={styles.reviewLabel}>Your Review:</Text>
                               <Text style={styles.reviewText}>
                                 "{selectedRatingsBooking.mechanic_review}"
                               </Text>
@@ -1762,23 +1689,14 @@ export default function MechanicDashboard() {
                         </>
                       ) : (
                         <View style={styles.noRatingContainer}>
-                          <Ionicons
-                            name="time-outline"
-                            size={32}
-                            color="#CBD5E1"
-                          />
-                          <Text style={styles.noRatingText}>
-                            You haven't rated yet
-                          </Text>
+                          <Ionicons name="time-outline" size={32} color="#CBD5E1" />
+                          <Text style={styles.noRatingText}>You haven't rated yet</Text>
                         </View>
                       )}
                     </View>
                   </View>
 
-                  <TouchableOpacity
-                    style={styles.closeRatingsButton}
-                    onPress={() => setShowRatingsDetailModal(false)}
-                  >
+                  <TouchableOpacity style={styles.closeRatingsButton} onPress={() => setShowRatingsDetailModal(false)}>
                     <Text style={styles.closeRatingsButtonText}>Close</Text>
                   </TouchableOpacity>
                 </View>
@@ -1797,10 +1715,7 @@ export default function MechanicDashboard() {
       </View>
 
       {/* Today's Earnings Card */}
-      <TouchableOpacity 
-        style={styles.earningsCard} 
-        onPress={() => setActiveTab("analytics")}
-      >
+      <TouchableOpacity style={styles.earningsCard} onPress={() => setActiveTab("analytics")}>
         <View style={styles.earningsLeft}>
           <Ionicons name="cash-outline" size={28} color="#10B981" />
           <View>
@@ -1811,10 +1726,7 @@ export default function MechanicDashboard() {
             </Text>
           </View>
         </View>
-        <TouchableOpacity
-          onPress={fetchTodayEarnings}
-          style={styles.refreshEarnings}
-        >
+        <TouchableOpacity onPress={fetchTodayEarnings} style={styles.refreshEarnings}>
           <Ionicons name="refresh-outline" size={20} color="#64748B" />
         </TouchableOpacity>
       </TouchableOpacity>
@@ -1822,10 +1734,7 @@ export default function MechanicDashboard() {
       {/* Status Bar */}
       <View style={styles.statusBar}>
         <TouchableOpacity
-          style={[
-            styles.statusButton,
-            online ? styles.onlineBtn : styles.offlineBtn,
-          ]}
+          style={[styles.statusButton, online ? styles.onlineBtn : styles.offlineBtn]}
           onPress={toggleAvailability}
         >
           <View style={styles.statusDot} />
@@ -1847,12 +1756,7 @@ export default function MechanicDashboard() {
           style={[styles.tab, activeTab === "available" && styles.activeTab]}
           onPress={() => setActiveTab("available")}
         >
-          <Text
-            style={[
-              styles.tabText,
-              activeTab === "available" && styles.activeTabText,
-            ]}
-          >
+          <Text style={[styles.tabText, activeTab === "available" && styles.activeTabText]}>
             Available ({jobs.length})
           </Text>
         </TouchableOpacity>
@@ -1860,12 +1764,7 @@ export default function MechanicDashboard() {
           style={[styles.tab, activeTab === "myJobs" && styles.activeTab]}
           onPress={() => setActiveTab("myJobs")}
         >
-          <Text
-            style={[
-              styles.tabText,
-              activeTab === "myJobs" && styles.activeTabText,
-            ]}
-          >
+          <Text style={[styles.tabText, activeTab === "myJobs" && styles.activeTabText]}>
             My Jobs ({myJobs.length})
           </Text>
         </TouchableOpacity>
@@ -1873,12 +1772,7 @@ export default function MechanicDashboard() {
           style={[styles.tab, activeTab === "profile" && styles.activeTab]}
           onPress={() => setActiveTab("profile")}
         >
-          <Text
-            style={[
-              styles.tabText,
-              activeTab === "profile" && styles.activeTabText,
-            ]}
-          >
+          <Text style={[styles.tabText, activeTab === "profile" && styles.activeTabText]}>
             Profile
           </Text>
         </TouchableOpacity>
@@ -1886,12 +1780,7 @@ export default function MechanicDashboard() {
           style={[styles.tab, activeTab === "analytics" && styles.activeTab]}
           onPress={() => setActiveTab("analytics")}
         >
-          <Text
-            style={[
-              styles.tabText,
-              activeTab === "analytics" && styles.activeTabText,
-            ]}
-          >
+          <Text style={[styles.tabText, activeTab === "analytics" && styles.activeTabText]}>
             Analytics
           </Text>
         </TouchableOpacity>
@@ -1994,12 +1883,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 8,
   },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#FFF",
-  },
+  statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#FFF" },
   onlineBtn: { backgroundColor: "#10B981" },
   offlineBtn: { backgroundColor: "#64748B" },
   statusButtonText: { color: "#FFF", fontWeight: "600", fontSize: 14 },
@@ -2122,18 +2006,8 @@ const styles = StyleSheet.create({
   smallBtnText: { fontWeight: "700", fontSize: 12, color: "#FFF" },
 
   emptyState: { padding: 48, alignItems: "center" },
-  emptyStateText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#64748B",
-    marginTop: 12,
-  },
-  emptyStateSubtext: {
-    fontSize: 14,
-    color: "#94A3B8",
-    textAlign: "center",
-    marginTop: 8,
-  },
+  emptyStateText: { fontSize: 16, fontWeight: "600", color: "#64748B", marginTop: 12 },
+  emptyStateSubtext: { fontSize: 14, color: "#94A3B8", textAlign: "center", marginTop: 8 },
 
   modalOverlay: {
     flex: 1,
@@ -2141,11 +2015,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  modalScrollContent: {
-    flexGrow: 1,
-    justifyContent: "center",
-    padding: 20,
-  },
+  modalScrollContent: { flexGrow: 1, justifyContent: "center", padding: 20 },
   modalContent: {
     backgroundColor: "#FFF",
     borderRadius: 20,
@@ -2162,19 +2032,8 @@ const styles = StyleSheet.create({
     borderBottomColor: "#E2E8F0",
     marginBottom: 16,
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#0F172A",
-    marginBottom: 8,
-    textAlign: "center",
-  },
-  modalText: {
-    fontSize: 14,
-    color: "#475569",
-    marginBottom: 16,
-    textAlign: "center",
-  },
+  modalTitle: { fontSize: 20, fontWeight: "700", color: "#0F172A", textAlign: "center" },
+  modalText: { fontSize: 14, color: "#475569", marginBottom: 16, textAlign: "center" },
   modalDetails: {
     backgroundColor: "#F1F5F9",
     padding: 12,
@@ -2182,60 +2041,59 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   modalDetailText: { fontSize: 13, color: "#0F172A", marginBottom: 4 },
-  modalButtons: { flexDirection: "row", gap: 12 },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: "center",
-  },
+  modalButtons: { flexDirection: "row", gap: 12, marginTop: 16 },
+  modalButton: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: "center" },
   modalCancelButton: { backgroundColor: "#F1F5F9" },
   modalCancelText: { color: "#64748B", fontWeight: "600" },
   modalAcceptButton: { backgroundColor: "#0F172A" },
   modalAcceptText: { color: "#FFF", fontWeight: "600" },
 
   otpHeader: { alignItems: "center", marginBottom: 16 },
-  otpDisplayText: {
-    fontSize: 48,
-    fontWeight: "800",
-    textAlign: "center",
-    letterSpacing: 8,
-    color: "#0F172A",
-    marginVertical: 20,
-  },
-  otpInstruction: {
-    fontSize: 14,
-    color: "#64748B",
-    textAlign: "center",
-    marginBottom: 8,
-  },
-  otpExpiry: {
-    fontSize: 12,
-    color: "#EF4444",
-    textAlign: "center",
-    marginBottom: 20,
-  },
-  otpStatus: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#F59E0B",
-    textAlign: "center",
+  generatedOtpContainer: {
+    backgroundColor: "#F0FDF4",
+    borderRadius: 16,
+    padding: 20,
+    alignItems: "center",
     marginBottom: 16,
   },
-  otpVerified: { color: "#10B981" },
-  modalCloseButton: {
-    backgroundColor: "#0F172A",
-    padding: 12,
-    borderRadius: 8,
-    alignItems: "center",
+  generatedOtpLabel: { fontSize: 14, color: "#047857", marginBottom: 8 },
+  generatedOtpDisplay: {
+    fontSize: 42,
+    fontWeight: "800",
+    fontFamily: "monospace",
+    letterSpacing: 6,
+    color: "#10B981",
   },
+  generatedOtpExpiry: { fontSize: 12, color: "#EF4444", marginTop: 8 },
+  otpDivider: { flexDirection: "row", alignItems: "center", marginVertical: 16 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: "#E2E8F0" },
+  dividerText: { marginHorizontal: 12, fontSize: 11, color: "#94A3B8", fontWeight: "600" },
+  otpInstruction: { fontSize: 14, color: "#64748B", textAlign: "center", marginBottom: 12 },
+  otpInputField: {
+    backgroundColor: "#F1F5F9",
+    borderRadius: 12,
+    padding: 16,
+    fontSize: 24,
+    fontWeight: "700",
+    letterSpacing: 8,
+    textAlign: "center",
+    marginVertical: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  refreshOtpButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 16,
+    padding: 8,
+  },
+  refreshOtpText: { fontSize: 13, color: "#3B82F6", fontWeight: "500" },
+  modalCloseButton: { backgroundColor: "#0F172A", padding: 12, borderRadius: 8, alignItems: "center" },
   modalCloseText: { color: "#FFF", fontWeight: "600" },
 
-  ratingContainer: {
-    flexDirection: "row",
-    justifyContent: "center",
-    marginVertical: 20,
-  },
+  ratingContainer: { flexDirection: "row", justifyContent: "center", marginVertical: 20 },
   starButton: { padding: 8 },
   reviewInput: {
     backgroundColor: "#F1F5F9",
@@ -2285,48 +2143,16 @@ const styles = StyleSheet.create({
   },
   mechanicBadge: { backgroundColor: "#F0FDF4", color: "#10B981" },
   ratingContent: { padding: 16 },
-  ratingStarsLarge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    marginBottom: 12,
-  },
-  ratingText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#0F172A",
-    marginLeft: 4,
-  },
-  reviewContainer: {
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: "#E2E8F0",
-  },
-  reviewLabel: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#64748B",
-    marginBottom: 8,
-  },
-  reviewText: {
-    fontSize: 14,
-    color: "#0F172A",
-    lineHeight: 20,
-    fontStyle: "italic",
-  },
+  ratingStarsLarge: { flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 12 },
+  ratingText: { fontSize: 14, fontWeight: "600", color: "#0F172A", marginLeft: 4 },
+  reviewContainer: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: "#E2E8F0" },
+  reviewLabel: { fontSize: 12, fontWeight: "600", color: "#64748B", marginBottom: 8 },
+  reviewText: { fontSize: 14, color: "#0F172A", lineHeight: 20, fontStyle: "italic" },
   noRatingContainer: { alignItems: "center", paddingVertical: 20 },
   noRatingText: { fontSize: 13, color: "#94A3B8", marginTop: 8 },
-  closeRatingsButton: {
-    marginTop: 20,
-    backgroundColor: "#0F172A",
-    padding: 14,
-    borderRadius: 12,
-    alignItems: "center",
-  },
-  navigateBtn: {
-    backgroundColor: "#3B82F6",
-  },
+  closeRatingsButton: { marginTop: 20, backgroundColor: "#0F172A", padding: 14, borderRadius: 12, alignItems: "center" },
+  closeRatingsButtonText: { color: "#FFF", fontSize: 16, fontWeight: "600" },
+  navigateBtn: { backgroundColor: "#3B82F6" },
   locationCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -2338,12 +2164,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#E2E8F0",
   },
-  locationCardLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    flex: 1,
-  },
+  locationCardLeft: { flexDirection: "row", alignItems: "center", gap: 12, flex: 1 },
   locationIconContainer: {
     width: 36,
     height: 36,
@@ -2352,31 +2173,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  locationCardTitle: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#0F172A",
-  },
-  locationCardAddress: {
-    fontSize: 11,
-    color: "#64748B",
-    marginTop: 2,
-  },
-  locationCardRight: {
-    paddingLeft: 8,
-  },
-  navigateText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#3B82F6",
-  },
-  closeRatingsButtonText: { color: "#FFF", fontSize: 16, fontWeight: "600" },
+  locationCardTitle: { fontSize: 13, fontWeight: "600", color: "#0F172A" },
+  locationCardAddress: { fontSize: 11, color: "#64748B", marginTop: 2 },
+  locationCardRight: { paddingLeft: 8 },
+  navigateText: { fontSize: 12, fontWeight: "600", color: "#3B82F6" },
   
   // Profile styles
-  profileContainer: {
-    flex: 1,
-    backgroundColor: "#F8FAFC",
-  },
+  profileContainer: { flex: 1, backgroundColor: "#F8FAFC" },
   profileHeader: {
     alignItems: "center",
     backgroundColor: "#FFF",
@@ -2393,17 +2196,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 16,
   },
-  profileName: {
-    fontSize: 22,
-    fontWeight: "700",
-    color: "#0F172A",
-    marginBottom: 4,
-  },
-  profileEmail: {
-    fontSize: 14,
-    color: "#64748B",
-    marginBottom: 8,
-  },
+  profileName: { fontSize: 22, fontWeight: "700", color: "#0F172A", marginBottom: 4 },
+  profileEmail: { fontSize: 14, color: "#64748B", marginBottom: 8 },
   verifiedBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -2413,11 +2207,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     gap: 4,
   },
-  verifiedText: {
-    fontSize: 12,
-    color: "#10B981",
-    fontWeight: "600",
-  },
+  verifiedText: { fontSize: 12, color: "#10B981", fontWeight: "600" },
   statsGrid: {
     flexDirection: "row",
     justifyContent: "space-around",
@@ -2425,48 +2215,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFF",
     marginTop: 8,
   },
-  statCard: {
-    alignItems: "center",
-  },
-  statValue: {
-    fontSize: 20,
-    fontWeight: "800",
-    color: "#0F172A",
-    marginTop: 8,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: "#64748B",
-    marginTop: 4,
-  },
-  infoSection: {
-    backgroundColor: "#FFF",
-    marginTop: 12,
-    padding: 20,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#0F172A",
-    marginBottom: 16,
-  },
-  infoRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    marginBottom: 12,
-  },
-  infoText: {
-    fontSize: 14,
-    color: "#475569",
-    flex: 1,
-  },
+  statCard: { alignItems: "center" },
+  statValue: { fontSize: 20, fontWeight: "800", color: "#0F172A", marginTop: 8 },
+  statLabel: { fontSize: 12, color: "#64748B", marginTop: 4 },
+  infoSection: { backgroundColor: "#FFF", marginTop: 12, padding: 20 },
+  sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
+  sectionTitle: { fontSize: 18, fontWeight: "700", color: "#0F172A", marginBottom: 16 },
+  infoRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 },
+  infoText: { fontSize: 14, color: "#475569", flex: 1 },
   serviceCard: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -2475,203 +2231,43 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#E2E8F0",
   },
-  serviceInfo: {
-    flex: 1,
-  },
-  serviceName: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#0F172A",
-    marginBottom: 4,
-  },
-  serviceDescription: {
-    fontSize: 12,
-    color: "#64748B",
-  },
-  servicePrice: {
-    alignItems: "flex-end",
-  },
-  priceText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#10B981",
-  },
-  customPriceBadge: {
-    fontSize: 10,
-    color: "#8B5CF6",
-    marginTop: 2,
-  },
-  noServicesText: {
-    fontSize: 14,
-    color: "#94A3B8",
-    textAlign: "center",
-    paddingVertical: 20,
-  },
+  serviceInfo: { flex: 1 },
+  serviceName: { fontSize: 16, fontWeight: "600", color: "#0F172A", marginBottom: 4 },
+  serviceDescription: { fontSize: 12, color: "#64748B" },
+  servicePrice: { alignItems: "flex-end" },
+  priceText: { fontSize: 16, fontWeight: "700", color: "#10B981" },
+  customPriceBadge: { fontSize: 10, color: "#8B5CF6", marginTop: 2 },
+  noServicesText: { fontSize: 14, color: "#94A3B8", textAlign: "center", paddingVertical: 20 },
   
-  // Edit profile modal styles
-  input: {
-    backgroundColor: "#F1F5F9",
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    fontSize: 14,
-  },
-  textArea: {
-    minHeight: 80,
-    textAlignVertical: "top",
-  },
-  serviceSelectionCard: {
-    marginBottom: 16,
-    padding: 12,
-    backgroundColor: "#F8FAFC",
-    borderRadius: 8,
-  },
-  serviceCheckbox: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 12,
-  },
-  serviceCheckboxInfo: {
-    flex: 1,
-  },
-  serviceCheckboxName: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#0F172A",
-    marginBottom: 4,
-  },
-  serviceCheckboxDesc: {
-    fontSize: 12,
-    color: "#64748B",
-    marginBottom: 4,
-  },
-  defaultPrice: {
-    fontSize: 11,
-    color: "#10B981",
-  },
-  priceInput: {
-    backgroundColor: "#FFF",
-    borderRadius: 8,
-    padding: 10,
-    marginTop: 12,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
-    fontSize: 14,
-  },
-  saveButton: {
-    backgroundColor: "#0F172A",
-    padding: 16,
-    borderRadius: 12,
-    alignItems: "center",
-    marginTop: 20,
-  },
-  saveButtonText: {
-    color: "#FFF",
-    fontSize: 16,
-    fontWeight: "600",
-  },
+  input: { backgroundColor: "#F1F5F9", borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 14 },
+  textArea: { minHeight: 80, textAlignVertical: "top" },
+  serviceSelectionCard: { marginBottom: 16, padding: 12, backgroundColor: "#F8FAFC", borderRadius: 8 },
+  serviceCheckbox: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
+  serviceCheckboxInfo: { flex: 1 },
+  serviceCheckboxName: { fontSize: 14, fontWeight: "600", color: "#0F172A", marginBottom: 4 },
+  serviceCheckboxDesc: { fontSize: 12, color: "#64748B", marginBottom: 4 },
+  defaultPrice: { fontSize: 11, color: "#10B981" },
+  saveButton: { backgroundColor: "#0F172A", padding: 16, borderRadius: 12, alignItems: "center", marginTop: 20 },
+  saveButtonText: { color: "#FFF", fontSize: 16, fontWeight: "600" },
   
-  // Analytics styles
-  analyticsContainer: {
-    flex: 1,
-    backgroundColor: "#F8FAFC",
-  },
-  earningsOverview: {
-    backgroundColor: "#FFF",
-    padding: 20,
-    marginBottom: 12,
-  },
-  overviewTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#0F172A",
-    marginBottom: 16,
-  },
-  earningCards: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  earningCard: {
-    flex: 1,
-    backgroundColor: "#F8FAFC",
-    padding: 12,
-    borderRadius: 12,
-    alignItems: "center",
-  },
-  earningLabel: {
-    fontSize: 12,
-    color: "#64748B",
-    marginBottom: 4,
-  },
-  earningJobs: {
-    fontSize: 10,
-    color: "#94A3B8",
-    marginTop: 4,
-  },
-  statsSection: {
-    backgroundColor: "#FFF",
-    padding: 20,
-    marginBottom: 12,
-  },
-  serviceStatCard: {
-    marginBottom: 16,
-    padding: 12,
-    backgroundColor: "#F8FAFC",
-    borderRadius: 12,
-  },
-  serviceStatHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  serviceStatName: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#0F172A",
-  },
-  serviceStatRating: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  serviceStatDetails: {
-    flexDirection: "row",
-    gap: 16,
-  },
-  serviceStatItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  serviceStatValue: {
-    fontSize: 13,
-    color: "#475569",
-  },
-  noStatsText: {
-    fontSize: 14,
-    color: "#94A3B8",
-    textAlign: "center",
-    paddingVertical: 20,
-  },
-  quickStatsGrid: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    paddingVertical: 16,
-  },
-  quickStat: {
-    alignItems: "center",
-  },
-  quickStatValue: {
-    fontSize: 24,
-    fontWeight: "800",
-    color: "#0F172A",
-    marginTop: 8,
-  },
-  quickStatLabel: {
-    fontSize: 12,
-    color: "#64748B",
-    marginTop: 4,
-  },
+  analyticsContainer: { flex: 1, backgroundColor: "#F8FAFC" },
+  earningsOverview: { backgroundColor: "#FFF", padding: 20, marginBottom: 12 },
+  overviewTitle: { fontSize: 18, fontWeight: "700", color: "#0F172A", marginBottom: 16 },
+  earningCards: { flexDirection: "row", justifyContent: "space-between", gap: 12 },
+  earningCard: { flex: 1, backgroundColor: "#F8FAFC", padding: 12, borderRadius: 12, alignItems: "center" },
+  earningLabel: { fontSize: 12, color: "#64748B", marginBottom: 4 },
+  earningJobs: { fontSize: 10, color: "#94A3B8", marginTop: 4 },
+  statsSection: { backgroundColor: "#FFF", padding: 20, marginBottom: 12 },
+  serviceStatCard: { marginBottom: 16, padding: 12, backgroundColor: "#F8FAFC", borderRadius: 12 },
+  serviceStatHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  serviceStatName: { fontSize: 16, fontWeight: "600", color: "#0F172A" },
+  serviceStatRating: { flexDirection: "row", alignItems: "center", gap: 4 },
+  serviceStatDetails: { flexDirection: "row", gap: 16 },
+  serviceStatItem: { flexDirection: "row", alignItems: "center", gap: 6 },
+  serviceStatValue: { fontSize: 13, color: "#475569" },
+  noStatsText: { fontSize: 14, color: "#94A3B8", textAlign: "center", paddingVertical: 20 },
+  quickStatsGrid: { flexDirection: "row", justifyContent: "space-around", paddingVertical: 16 },
+  quickStat: { alignItems: "center" },
+  quickStatValue: { fontSize: 24, fontWeight: "800", color: "#0F172A", marginTop: 8 },
+  quickStatLabel: { fontSize: 12, color: "#64748B", marginTop: 4 },
 });

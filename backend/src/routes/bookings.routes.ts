@@ -215,41 +215,23 @@ bookingsRouter.post("/:bookingId/generate-otp", async (req, res) => {
   }
 });
 
-
-bookingsRouter.post("/:bookingId/complete-with-otp", async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-    const { otp } = req.body;
-
-    if (!otp) {
-      return res.status(400).json({ error: "OTP is required" });
-    }
-
-    const booking = await verifyOTPAndComplete(bookingId, otp);
-    res.json({
-      success: true,
-      message: "Service completed successfully",
-      data: booking,
-    });
-  } catch (err: any) {
-    console.error("Error completing booking:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // In your backend routes file
 
-// Endpoint 1: Verify OTP and complete service (without rating)
 bookingsRouter.post("/:bookingId/verify-otp", async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const { otp } = req.body;
+    const { otp, mechanicId } = req.body;  // ✅ Added mechanicId
 
     if (!otp) {
       return res.status(400).json({ error: "OTP is required" });
     }
+    
+    // ✅ Validate mechanicId
+    if (!mechanicId) {
+      return res.status(400).json({ error: "Mechanic ID is required" });
+    }
 
-    const booking = await verifyOTPAndComplete(bookingId, otp);
+    const booking = await verifyOTPAndComplete(bookingId, otp, mechanicId);
     res.json({
       success: true,
       message: "Service completed successfully",

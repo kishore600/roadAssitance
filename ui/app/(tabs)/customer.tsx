@@ -1,12 +1,5 @@
-// app/customer/index.tsx - PRODUCTION CRASH FIXED VERSION
-// Key fixes:
-// 1. Removed direct `socket` usage — all events go through socketService
-// 2. Eliminated duplicate service:completed listener
-// 3. Moved ALL socket listeners into ONE stable useEffect with ref-based callbacks
-// 4. Used useRef for activeBooking inside socket callbacks to avoid stale closures
-// 5. Graceful MapViewDirections error handling
-// 6. Fixed socket.ts export — socketService IS the socket, no dual export confusion
-
+/* eslint-disable react/no-unescaped-entities */
+// tabs/customer.tsx
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   Alert,
@@ -135,6 +128,10 @@ export default function CustomerScreen() {
   >(null);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [mechanicName, setMechanicName] = useState<string>("");
+const [customerOtp, setCustomerOtp] = useState<string | null>(null);
+const [otpExpiry, setOtpExpiry] = useState<Date | null>(null);
+const [isWaitingForOtp, setIsWaitingForOtp] = useState(false);
+
 
   const mapRef = useRef<MapView>(null);
   const locationUpdateInterval = useRef<any>(null);
@@ -146,6 +143,29 @@ export default function CustomerScreen() {
   useEffect(() => {
     activeBookingRef.current = activeBooking;
   }, [activeBooking]);
+
+
+  const fetchBookingOTP = async (bookingId: string) => {
+  try {
+    const response = await api.get(`/bookings/${bookingId}`);
+    if (response.data) {
+      if (response.data.completion_otp) {
+        setCustomerOtp(response.data.completion_otp);
+        setOtpExpiry(response.data.otp_expires_at ? new Date(response.data.otp_expires_at) : null);
+        setIsWaitingForOtp(false);
+      } else {
+        // OTP not generated yet
+        setIsWaitingForOtp(true);
+        setCustomerOtp(null);
+        // Poll every 5 seconds to check if OTP is generated
+        setTimeout(() => fetchBookingOTP(bookingId), 5000);
+      }
+    }
+  } catch (error) {
+    console.error("Failed to fetch booking OTP:", error);
+  }
+};
+
 
   // ✅ FIX 2: Single stable ref for the "show rating" flow to avoid re-registration loops
   const showRatingFlow = useCallback((bookingId: string) => {
@@ -347,6 +367,13 @@ export default function CustomerScreen() {
       socketService.requestMechanicLocation(activeBooking.id);
     }
   }, [activeBooking?.id]);
+
+  useEffect(() => {
+  if (activeBooking?.status === "arrived" && activeBooking?.id) {
+    fetchBookingOTP(activeBooking.id);
+    setShowOTPModal(true);
+  }
+}, [activeBooking?.status, activeBooking?.id]);
 
   // Monitor app state
   useEffect(() => {
@@ -1350,63 +1377,79 @@ async function createBooking(service: ServiceItem) {
       </Modal>
     );
   };
+const renderOTPModal = () => {
+  const getRemainingMinutes = () => {
+    if (!otpExpiry) return 10;
+    const remaining = Math.max(0, Math.floor((otpExpiry.getTime() - Date.now()) / 60000));
+    return remaining;
+  };
 
-  const renderOTPModal = () => (
+  return (
     <Modal visible={showOTPModal} transparent={true} animationType="slide">
       <View style={styles.modalOverlay}>
         <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
             <Ionicons name="shield-checkmark" size={50} color="#10B981" />
-            <Text style={styles.modalTitle}>Verify Service Completion</Text>
+            <Text style={styles.modalTitle}>Service Completion</Text>
             <Text style={styles.modalSubtitle}>
-              Ask the mechanic for the 6-digit OTP code
+              Your mechanic has arrived and is ready to complete the service
             </Text>
           </View>
 
-          <TextInput
-            style={styles.otpInput}
-            placeholder="Enter 6-digit OTP"
-            value={otpCode}
-            onChangeText={setOtpCode}
-            keyboardType="number-pad"
-            maxLength={6}
-            textAlign="center"
-            autoFocus
-          />
+          {/* Show OTP to customer - they will read it to mechanic */}
+          {customerOtp ? (
+            <View style={styles.customerOtpContainer}>
+              <Text style={styles.customerOtpLabel}>
+                Read this code to your mechanic:
+              </Text>
+              <Text style={styles.customerOtpDisplay}>{customerOtp}</Text>
+              <Text style={styles.customerOtpExpiry}>
+                This code expires in {getRemainingMinutes()} minutes
+              </Text>
+            </View>
+          ) : isWaitingForOtp ? (
+            <View style={styles.waitingForOtpContainer}>
+              <ActivityIndicator size="large" color="#10B981" />
+              <Text style={styles.waitingForOtpText}>
+                Waiting for mechanic to generate OTP...
+              </Text>
+              <Text style={styles.waitingForOtpSubtext}>
+                Please ask your mechanic to click &#34;Generate OTP" in their app
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.waitingForOtpContainer}>
+              <Ionicons name="alert-circle-outline" size={48} color="#F59E0B" />
+              <Text style={styles.waitingForOtpText}>
+                No OTP generated yet
+              </Text>
+              <Text style={styles.waitingForOtpSubtext}>
+                Please ask your mechanic to generate an OTP code
+              </Text>
+            </View>
+          )}
 
-          <View style={styles.modalButtons}>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.cancelModalButton]}
-              onPress={() => {
-                setShowOTPModal(false);
-                setOtpCode("");
-              }}
-            >
-              <Text style={styles.cancelModalButtonText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.modalButton,
-                styles.verifyModalButton,
-                completingService && styles.disabledButton,
-              ]}
-              onPress={handleVerifyOTP}
-              disabled={completingService}
-            >
-              {completingService ? (
-                <ActivityIndicator color="#FFF" size="small" />
-              ) : (
-                <Text style={styles.verifyModalButtonText}>
-                  Verify & Complete
-                </Text>
-              )}
-            </TouchableOpacity>
+          <View style={styles.instructionContainer}>
+            <Ionicons name="information-circle-outline" size={20} color="#64748B" />
+            <Text style={styles.instructionText}>
+              Tell your mechanic the 6-digit code above. They will enter it in their app to complete the service.
+            </Text>
           </View>
+
+          <TouchableOpacity
+            style={styles.modalCloseButton}
+            onPress={() => {
+              setShowOTPModal(false);
+              setCustomerOtp(null);
+            }}
+          >
+            <Text style={styles.modalCloseButtonText}>Close</Text>
+          </TouchableOpacity>
         </View>
       </View>
     </Modal>
   );
-
+};
   const renderRatingModal = () => (
     <Modal visible={showRatingModal} transparent={true} animationType="slide">
       <View style={styles.modalOverlay}>
@@ -2028,6 +2071,74 @@ const styles = StyleSheet.create({
     marginTop: 2,
     maxWidth: 150,
   },
+  // Add to customer.tsx styles
+customerOtpContainer: {
+  backgroundColor: "#F0FDF4",
+  borderRadius: 16,
+  padding: 24,
+  alignItems: "center",
+  marginBottom: 20,
+},
+customerOtpLabel: {
+  fontSize: 14,
+  color: "#047857",
+  marginBottom: 12,
+},
+customerOtpDisplay: {
+  fontSize: 48,
+  fontWeight: "800",
+  fontFamily: "monospace",
+  letterSpacing: 8,
+  color: "#10B981",
+  marginBottom: 12,
+},
+customerOtpExpiry: {
+  fontSize: 12,
+  color: "#EF4444",
+},
+waitingForOtpContainer: {
+  alignItems: "center",
+  padding: 24,
+  backgroundColor: "#F1F5F9",
+  borderRadius: 16,
+  marginBottom: 20,
+},
+waitingForOtpText: {
+  fontSize: 14,
+  color: "#64748B",
+  marginTop: 12,
+},
+instructionContainer: {
+  flexDirection: "row",
+  backgroundColor: "#EFF6FF",
+  padding: 16,
+  borderRadius: 12,
+  marginBottom: 20,
+  gap: 12,
+},
+instructionText: {
+  fontSize: 13,
+  color: "#1E40AF",
+  flex: 1,
+  lineHeight: 18,
+},
+modalCloseButton: {
+  backgroundColor: "#0F172A",
+  padding: 16,
+  borderRadius: 12,
+  alignItems: "center",
+},
+modalCloseButtonText: {
+  color: "#FFF",
+  fontSize: 16,
+  fontWeight: "600",
+},
+waitingForOtpSubtext: {
+  fontSize: 12,
+  color: "#94A3B8",
+  marginTop: 8,
+  textAlign: "center",
+},
   submitRatingButtonText: { color: "#FFF", fontSize: 16, fontWeight: "600" },
   skipButton: { paddingVertical: 12, alignItems: "center" },
   skipButtonText: { color: "#64748B", fontSize: 14 },

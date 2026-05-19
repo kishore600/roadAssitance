@@ -779,7 +779,7 @@ export async function cleanupExpiredBookings() {
 
 // services/booking.service.ts - Update the verifyOTPAndComplete function
 
-export async function verifyOTPAndComplete(bookingId: string, otp: string) {
+export async function verifyOTPAndComplete(bookingId: string, otp: string, mechanicId: string) {
   // First, get the booking to verify OTP
   const { data: booking, error: fetchError } = await supabaseAdmin
     .from("bookings")
@@ -793,6 +793,11 @@ export async function verifyOTPAndComplete(bookingId: string, otp: string) {
     throw new Error("Booking not found");
   }
 
+  // ✅ CRITICAL: Verify this is the assigned mechanic
+  if (booking.mechanic_id !== mechanicId) {
+    throw new Error("You are not authorized to complete this booking");
+  }
+
   // Allow completion for arrived or on_the_way status
   if (booking.status !== "arrived" && booking.status !== "on_the_way") {
     throw new Error("Service cannot be completed at this stage");
@@ -804,12 +809,10 @@ export async function verifyOTPAndComplete(bookingId: string, otp: string) {
 
   // Check if OTP is expired
   if (new Date(booking.otp_expires_at) < new Date()) {
-    throw new Error(
-      "OTP has expired. Please ask mechanic to generate a new OTP",
-    );
+    throw new Error("OTP has expired. Please generate a new OTP");
   }
 
-  // Verify OTP
+  // ✅ Verify OTP (mechanic enters what customer tells them)
   if (booking.completion_otp !== otp) {
     throw new Error("Invalid OTP. Please try again");
   }
@@ -823,28 +826,26 @@ export async function verifyOTPAndComplete(bookingId: string, otp: string) {
       updated_at: new Date().toISOString(),
     })
     .eq("id", bookingId)
-    .select(
-      `
-            *,
-            customer:profiles!bookings_customer_id_fkey(
-                id,
-                full_name, 
-                email,
-                phone
-            ),
-            mechanic:profiles!bookings_mechanic_id_fkey(
-                id,
-                full_name, 
-                email,
-                phone
-            ),
-            service:services(
-                id,
-                name,
-                base_price
-            )
-        `,
-    )
+    .select(`
+      *,
+      customer:profiles!bookings_customer_id_fkey(
+        id,
+        full_name, 
+        email,
+        phone
+      ),
+      mechanic:profiles!bookings_mechanic_id_fkey(
+        id,
+        full_name, 
+        email,
+        phone
+      ),
+      service:services(
+        id,
+        name,
+        base_price
+      )
+    `)
     .single();
 
   if (error) throw error;
@@ -860,9 +861,6 @@ export async function verifyOTPAndComplete(bookingId: string, otp: string) {
 
   // Emit socket event for real-time update
   emitBookingUpdate(bookingId, data);
-
-  // Send push notifications for service completion
-  // await sendServiceCompletionNotifications(data);
 
   return data;
 }
